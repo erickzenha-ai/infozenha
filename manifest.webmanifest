@@ -1,0 +1,22 @@
+{
+  "name": "InfoZenha · Gestão de serviços",
+  "short_name": "InfoZenha",
+  "description": "Pedidos, agenda, financeiro e clientes da InfoZenha.",
+  "lang": "pt-BR",
+  "start_url": "./gestao-comercial.html#inicio",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F6F6F7",
+  "theme_color": "#2B2E32",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Pedidos", "url": "./gestao-comercial.html#pedidos", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Agenda", "url": "./gestao-comercial.html#agenda", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Financeiro", "url": "./gestao-comercial.html#financeiro", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}
