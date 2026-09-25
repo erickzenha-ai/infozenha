@@ -332,6 +332,7 @@ svg.i{flex-shrink:0}
 
 <section class="page" id="page-inicio">
   <div class="heading"><div><div class="eyebrow" id="home-eyebrow"></div><h1>Olá, Zenha 👋</h1><div class="sub">Aqui está o resumo do seu negócio.</div></div><div class="heading-actions"><div class="month-nav" data-month></div><button class="btn primary" onclick="openPedidoForm()">＋ Novo pedido</button></div></div>
+  <div id="home-sync-banner"></div>
   <div class="cards" id="home-cards"></div>
   <div class="grid-2">
     <div class="panel"><div class="panel-head"><div><h3>Faturamento acumulado</h3><small id="home-chart-sub"></small></div></div><div class="chartbox" id="home-chart"></div><div class="chart-legend"><span><i style="background:#F8601A"></i>Mês selecionado</span><span><i style="background:#C5C8CC"></i>Mês anterior</span></div></div>
@@ -624,6 +625,7 @@ const EV_COLOR={entrega:'#F8601A',comp:'#363A3E',entrada:'#C5C8CC'};
 const evClick=e=>e.pid?`openPedido('${e.pid}')`:`openCompromissoForm('${e.cid}')`;
 function renderInicio(){
   const k=state.month,s=monthStats(k),p=monthStats(shiftMonth(k,-1)),atrasoTotal=sum(allParcelas().filter(({x})=>isLate(x)),({x})=>x.valor);
+  $('home-sync-banner').innerHTML=!syncOn()&&!hasLocalData()?`<div class="panel" style="padding:16px 18px;margin-bottom:16px;border-color:var(--brand);background:var(--brand-soft);display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap"><div><b style="color:var(--brand-ink)">Este aparelho ainda não está conectado aos seus dados</b><div class="sub" style="font-size:12px;margin-top:3px">Conecte uma vez com a sua chave de acesso do GitHub para ver os clientes e pedidos do computador aqui.</div></div><button class="btn primary" onclick="navigate('config');setTimeout(()=>{const t=$('sync-token');t&&(t.scrollIntoView({block:'center'}),t.focus())},150)">Conectar agora</button></div>`:'';
   $('home-eyebrow').textContent=new Intl.DateTimeFormat('pt-BR',{weekday:'long',day:'numeric',month:'long'}).format(new Date());
   $('home-cards').innerHTML=`<div class="card"><div class="metric-head">Total em pedidos <span>${ico('clip',16)}</span></div><div class="metric">${brl(s.total)}</div>${trendHTML(s.total,p.total)}</div><div class="card"><div class="metric-head">Recebido no mês <span>${ico('wallet',16)}</span></div><div class="metric">${brl(s.recebido)}</div>${trendHTML(s.recebido,p.recebido)}</div><div class="card"><div class="metric-head">A receber <span>${ico('cal',16)}</span></div><div class="metric">${brl(s.aReceber)}</div><div class="trend">${atrasoTotal?`<span class="late-text">${brl(atrasoTotal)} em atraso</span>`:'<span>nenhum valor em atraso</span>'}</div></div><div class="card"><div class="metric-head">Lucro do mês <span>${ico('chart',16)}</span></div><div class="metric ${s.recebido-s.despPagas<0?'neg':''}">${brl(s.recebido-s.despPagas)}</div><div class="trend"><span>recebido − despesas pagas</span></div></div>`;
   const cur=cumulative(k),prev=cumulative(shiftMonth(k,-1));$('home-chart').innerHTML=lineChart(cur,prev,daysIn(k));$('home-chart-sub').textContent=`${monthLabel(k)} · ${s.count} ${s.count===1?'pedido':'pedidos'}`;
