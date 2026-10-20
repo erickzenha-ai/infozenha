@@ -209,6 +209,19 @@ svg.i{flex-shrink:0}
 .seg{display:inline-flex;background:var(--paper);border-radius:9px;padding:3px;gap:2px}
 .seg button{border:0;background:none;padding:7px 16px;border-radius:7px;font-size:12px;font-weight:600;color:#5E6368}
 .seg button.active{background:#fff;color:var(--brand-ink);box-shadow:0 1px 3px #1F22261a}
+.ck-grid{display:flex;flex-wrap:wrap;gap:6px}
+.ck{position:relative;display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:20px;padding:6px 11px;font-size:12px;cursor:pointer;background:#fff;color:#5E6368;user-select:none}
+.ck input{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}
+.ck:hover{border-color:#C5C8CC}
+.ck:has(input:focus-visible){outline:2px solid #F8601A55}
+.ck:has(input:checked){background:var(--brand-soft);border-color:var(--brand);color:var(--brand-ink);font-weight:600}
+.ck:has(input:checked):before{content:'✓'}
+.ck.warn:has(input:checked){background:#FEF3C7;border-color:#D97706;color:#92400E}
+.ck.ok:has(input:checked){background:#DCFCE7;border-color:#15803D;color:#15803D}
+.ck-tags{display:flex;flex-wrap:wrap;gap:5px}
+.ck-tag{border-radius:20px;padding:3px 9px;font-size:11px;font-weight:600;background:var(--brand-soft);color:var(--brand-ink)}
+.ck-tag.warn{background:#FEF3C7;color:#92400E}.ck-tag.ok{background:#DCFCE7;color:#15803D}.ck-tag.muted{background:#F1F1F2;color:#6B7075}
+.senha-box{display:inline-flex;align-items:center;gap:8px;font-family:monospace;font-size:13px}
 .items{grid-column:1/-1;border:1px solid var(--line);border-radius:9px;overflow:hidden}
 .item-row{display:grid;grid-template-columns:1fr 64px 110px 100px 30px;gap:8px;padding:8px 10px;border-bottom:1px solid #F1F1F2;align-items:center}
 .item-row.head{background:var(--paper);font-size:10px;font-weight:700;color:#8C9095;text-transform:uppercase;letter-spacing:.5px}
@@ -500,6 +513,11 @@ const ico=(k,s=18)=>`<svg class="i" viewBox="0 0 24 24" width="${s}" height="${s
 const STATUS={pendente:{label:'Pendente',c:'#B45309',bg:'#FEF3C7'},aprovacao:{label:'Aguardando aprovação',c:'#6D28D9',bg:'#EDE9FE'},pagamento:{label:'Aguardando pagamento',c:'#BE185D',bg:'#FCE7F3'},andamento:{label:'Em andamento',c:'#1D4ED8',bg:'#DBEAFE'},concluido:{label:'Concluído',c:'#15803D',bg:'#DCFCE7'},cancelado:{label:'Cancelado',c:'#6B7075',bg:'#F1F1F2'}};
 const ORDER=Object.keys(STATUS);
 const TIPO={servico:'Serviço',venda:'Venda'};
+// Checklist de entrada do equipamento (ordens de serviço): o que veio junto e em que estado chegou
+const CK_ACESSORIOS=['Fonte / carregador','Cabo de força','Bateria','Mouse','Teclado','Bolsa / case','Pen drive / dispositivo USB','HD / SSD externo','Cartão de memória','Caixa original'];
+const CK_ESTADO=['Tela riscada','Tela trincada / quebrada','Carcaça arranhada','Carcaça trincada / quebrada','Dobradiça solta / quebrada','Teclas faltando ou soltas','Parafusos faltando','Sinais de queda','Sinais de líquido / oxidação','Bateria estufada','Etiquetas / adesivos'];
+const CK_LIGA={sim:'Liga',nao:'Não liga',nt:'Não testado'};
+const temChecklist=c=>!!c&&!!((c.acessorios||[]).length||c.outros||c.semDefeitos||(c.estado||[]).length||c.liga||c.senha||c.obs);
 const DESPESA_CATS=['Peças e componentes','Materiais','Compra de mercadorias','Aluguel','Energia e internet','Ferramentas e equipamentos','Marketing','Impostos e taxas','Salários e pró-labore','Transporte','Outros'];
 const pill=s=>`<span class="pill" style="color:${STATUS[s].c};background:${STATUS[s].bg}">${STATUS[s].label}</span>`;
 // Orçamentos e cancelados não geram cobrança nem baixam estoque
@@ -656,8 +674,8 @@ function renderPedidos(){
   $('ped-chips').innerHTML=[['','Todos'],['servico','Serviços'],['venda','Vendas']].map(([k,l])=>`<button class="chip ${state.pedTipo===k?'active':''}" onclick="state.pedTipo='${k}';renderPedidos()">${l}</button>`).join('')+(state.pedStatus?`<button class="chip active" onclick="state.pedStatus='';renderPedidos()"><i style="background:${STATUS[state.pedStatus].c}"></i>${STATUS[state.pedStatus].label} ✕</button>`:'');
   if($('ped-q').value!==state.pedQ)$('ped-q').value=state.pedQ;
   const q=state.pedQ.trim().toLowerCase(),tab=PED_TABS.find(t=>t[0]===state.pedTab)[2];
-  const rows=db.pedidos.filter(p=>tab(p)&&(!state.pedTipo||p.tipo===state.pedTipo)&&(!state.pedStatus||p.status===state.pedStatus)&&(!q||[p.numero,p.cliente,p.equipamento,p.legado,...p.itens.map(i=>i.nome)].join(' ').toLowerCase().includes(q))).sort(byRecent);
-  $('ped-body').innerHTML=rows.length?rows.map(p=>`<tr class="click" onclick="openPedido('${p.id}')"><td><strong>${p.numero}</strong>${p.legado?`<small>antigo ${esc(p.legado)}</small>`:''}</td><td><strong>${esc(p.cliente)}</strong><small>${esc(p.equipamento||p.itens.map(i=>i.nome).join(', '))}</small></td><td><span class="tag">${TIPO[p.tipo]}</span></td><td>${fmtDate(p.data)}</td><td>${p.entrega?fmtDate(p.entrega)+(p.hora?`<small>${p.hora}</small>`:''):'—'}</td><td class="num"><strong>${brl(p.total)}</strong></td><td>${pill(p.status)}</td><td>${payBadge(p)}</td></tr>`).join(''):`<tr><td colspan="8" class="empty"><strong>Nenhum pedido encontrado</strong>${db.pedidos.length?'Tente outra aba ou busca.':'Clique em "Novo pedido" para registrar o primeiro.'}</td></tr>`;
+  const rows=db.pedidos.filter(p=>tab(p)&&(!state.pedTipo||p.tipo===state.pedTipo)&&(!state.pedStatus||p.status===state.pedStatus)&&(!q||[p.numero,p.cliente,p.equipamento,p.legado,...p.itens.map(i=>i.nome),...(p.checklist?[...(p.checklist.acessorios||[]),...(p.checklist.estado||[]),p.checklist.outros,p.checklist.obs]:[])].join(' ').toLowerCase().includes(q))).sort(byRecent);
+  $('ped-body').innerHTML=rows.length?rows.map(p=>`<tr class="click" onclick="openPedido('${p.id}')"><td><strong>${p.numero}</strong>${p.legado?`<small>antigo ${esc(p.legado)}</small>`:''}</td><td><strong>${esc(p.cliente)}</strong><small>${esc(p.equipamento||p.itens.map(i=>i.nome).join(', '))}${p.tipo==='servico'&&temChecklist(p.checklist)?` · ${(p.checklist.acessorios||[]).includes('Fonte / carregador')?'com fonte':'sem fonte'}`:''}</small></td><td><span class="tag">${TIPO[p.tipo]}</span></td><td>${fmtDate(p.data)}</td><td>${p.entrega?fmtDate(p.entrega)+(p.hora?`<small>${p.hora}</small>`:''):'—'}</td><td class="num"><strong>${brl(p.total)}</strong></td><td>${pill(p.status)}</td><td>${payBadge(p)}</td></tr>`).join(''):`<tr><td colspan="8" class="empty"><strong>Nenhum pedido encontrado</strong>${db.pedidos.length?'Tente outra aba ou busca.':'Clique em "Novo pedido" para registrar o primeiro.'}</td></tr>`;
   $('ped-foot').textContent=rows.length?`${rows.length} ${rows.length===1?'pedido':'pedidos'} · total ${brl(sum(rows.filter(p=>p.status!=='cancelado'),p=>p.total))}`:'';
 }
 
@@ -666,6 +684,7 @@ function openPedidoForm(id,preset={}){
   const p=id?db.pedidos.find(x=>x.id===id):null;
   const d=p?JSON.parse(JSON.stringify(p)):{tipo:'servico',status:'pendente',cliente:'',equipamento:'',defeito:'',obs:'',itens:[{nome:'',qtd:1,preco:0}],desconto:0,data:today(),entrega:'',hora:'',cond:{forma:db.config.pagamentos[0]||'',parcelas:1,vencimento:today(),recebido:false},...preset};
   formItems=d.itens.map(i=>({...i}));formTipo=d.tipo;
+  const ck={acessorios:[],estado:[],outros:'',semDefeitos:false,liga:'',senha:'',obs:'',...(d.checklist||{})};
   const locked=p&&(p.pagamentos||[]).some(x=>x.pago),c=d.cond||{};
   const body=`<div class="form">
   <div class="field full" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="seg" id="f-tipo">${['servico','venda'].map(t=>`<button type="button" data-t="${t}" onclick="setFormTipo('${t}')">${t==='servico'?'Ordem de serviço':'Venda'}</button>`).join('')}</div>${p?`<span class="tag">Nº ${p.numero}</span>`:''}</div>
@@ -674,6 +693,12 @@ function openPedidoForm(id,preset={}){
   <div class="field"><label>Data de entrada</label><input type="date" name="data" required value="${d.data}"></div>
   <div class="field full srv-only"><label>Equipamento / modelo / nº de série</label><input name="equipamento" value="${esc(d.equipamento)}" placeholder="Ex.: Notebook Dell Inspiron 15, SN 12345"></div>
   <div class="field full srv-only"><label>Defeito relatado / diagnóstico</label><textarea name="defeito" placeholder="O que o cliente relatou e o que foi identificado">${esc(d.defeito)}</textarea></div>
+  <div class="form-section srv-only">Checklist de entrada do equipamento</div>
+  <div class="field full srv-only"><label>Acessórios entregues pelo cliente</label><div class="ck-grid">${CK_ACESSORIOS.map(a=>ckBox('ac',a,ck.acessorios)).join('')}</div><input name="acOutros" style="margin-top:8px" value="${esc(ck.outros)}" placeholder="Outros acessórios (ex.: adaptador HDMI, pen drive 32 GB azul)"><span class="hint">Nada marcado = o cliente deixou só o equipamento.</span></div>
+  <div class="field full srv-only"><label>Estado físico na entrada</label><div class="ck-grid">${ckBox('semdef','Sem defeitos aparentes',ck.semDefeitos?['Sem defeitos aparentes']:[],'ok')}${CK_ESTADO.map(e=>ckBox('est',e,ck.estado,'warn')).join('')}</div></div>
+  <div class="field srv-only"><label>Liga na entrada?</label><div class="seg" id="f-liga">${Object.entries(CK_LIGA).map(([k,l])=>`<button type="button" data-v="${k}" class="${ck.liga===k?'active':''}" onclick="setLiga('${k}')">${l}</button>`).join('')}</div><input type="hidden" name="liga" value="${ck.liga||''}"></div>
+  <div class="field srv-only"><label>Senha de acesso (opcional)</label><input name="senha" autocomplete="off" value="${esc(ck.senha)}" placeholder="Senha ou PIN do Windows"><span class="hint">Fica só no sistema: não sai no documento impresso nem no WhatsApp.</span></div>
+  <div class="field full srv-only"><label>Observações do equipamento</label><textarea name="obsEquip" placeholder="Ex.: falta a tecla F5; risco na tampa; etiqueta de garantia de outra loja">${esc(ck.obs)}</textarea></div>
   <div class="form-section">Itens</div>
   <div class="items"><div class="item-row head"><div>Produto ou serviço</div><div>Qtd</div><div>Preço unit.</div><div class="subt">Subtotal</div><div></div></div><div id="f-items"></div><div class="items-foot"><button type="button" class="btn sm" onclick="addFormItem()">＋ Adicionar item</button><div class="totals"><label class="check">Desconto <input name="desconto" ${moneyAttrs(d.desconto||0,'oninput="updateFormTotal()"')}></label><label class="check">Frete <input name="frete" ${moneyAttrs(d.frete||0,'oninput="updateFormTotal()"')}></label><span>Total <strong id="f-total"></strong></span></div></div></div>
   <div class="form-section">Prazo e pagamento</div>
@@ -692,6 +717,10 @@ function openPedidoForm(id,preset={}){
   showModal({title:p?`Editar pedido ${p.numero}`:(orc?'Novo orçamento':formTipo==='venda'?'Nova venda':'Nova ordem de serviço'),body,wide:true,save:p?'Salvar alterações':(orc?'Criar orçamento':'Criar pedido'),onSave:()=>savePedido(p)});
   renderFormItems();setFormTipo(formTipo);
 }
+const ckBox=(name,label,lista,cls='')=>`<label class="ck ${cls}"><input type="checkbox" name="${name}" value="${esc(label)}" ${(lista||[]).includes(label)?'checked':''}><span>${esc(label)}</span></label>`;
+function setLiga(v){const f=$('modal-form');f.elements.liga.value=f.elements.liga.value===v?'':v;document.querySelectorAll('#f-liga button').forEach(b=>b.classList.toggle('active',b.dataset.v===f.elements.liga.value))}
+// "Sem defeitos aparentes" e os defeitos se excluem
+$('modal-form').addEventListener('change',e=>{const t=e.target;if(!t.checked)return;const f=$('modal-form');if(t.name==='semdef')f.querySelectorAll('input[name="est"]').forEach(c=>c.checked=false);if(t.name==='est'&&f.elements.semdef)f.elements.semdef.checked=false});
 function renderFormItems(){$('f-items').innerHTML=formItems.map((it,i)=>`<div class="item-row"><input list="dl-itens" autocomplete="off" value="${esc(it.nome)}" placeholder="Digite ou escolha do catálogo" oninput="itemInput(${i},'nome',this.value)" onchange="itemPick(${i},this.value)"><input type="number" min="0" step="1" value="${it.qtd}" oninput="itemInput(${i},'qtd',this.value)"><input ${moneyAttrs(it.preco,`id="f-preco-${i}" oninput="itemInput(${i},'preco',this.value)"`)}><div class="subt" id="f-sub-${i}">${brl(it.qtd*it.preco)}</div><button type="button" class="icon-btn" title="Remover item" onclick="removeFormItem(${i})">✕</button></div>`).join('');updateFormTotal()}
 function itemInput(i,k,v){formItems[i][k]=k==='nome'?v:k==='preco'?parseMoney(v):(Number(v)||0);const s=$('f-sub-'+i);if(s)s.textContent=brl(formItems[i].qtd*formItems[i].preco);updateFormTotal()}
 function itemPick(i,v){const c=catalogFind(v);if(c){$('f-preco-'+i).value=fmtMoney(c.preco);itemInput(i,'preco',c.preco)}}
@@ -707,6 +736,8 @@ async function savePedido(orig){
   let foto=orig?.foto||'';const file=f.elements.foto.files[0];if(file){try{foto=await compressImage(file,1100,.8)}catch{toast('Não foi possível ler a foto.');return false}}
   const srv=formTipo==='servico',data={tipo:formTipo,status:v.status,cliente:String(v.cliente).trim(),equipamento:srv?String(v.equipamento||'').trim():'',defeito:srv?String(v.defeito||'').trim():'',obs:String(v.obs||'').trim(),itens,desconto:parseMoney(v.desconto),frete:parseMoney(v.frete),data:v.data||today(),entrega:v.entrega||'',hora:v.hora||'',foto};
   data.total=calcTotal(itens,data.desconto,data.frete);
+  const fd=new FormData(f);
+  data.checklist=srv?{acessorios:fd.getAll('ac'),outros:String(v.acOutros||'').trim(),semDefeitos:!!v.semdef,estado:fd.getAll('est'),liga:v.liga||'',senha:String(v.senha||'').trim(),obs:String(v.obsEquip||'').trim()}:null;
   const locked=orig&&(orig.pagamentos||[]).some(x=>x.pago);
   if(!locked)data.cond={forma:v.forma||'',parcelas:Number(v.parcelas)||1,vencimento:v.vencimento||data.data,recebido:!!v.recebido};
   const p=orig||{id:uid(),numero:nextNumero(data.data),pagamentos:[],baixa:{},criadoEm:new Date().toISOString()};
@@ -724,7 +755,7 @@ function openPedido(id){
   <div class="drawer-body">
     <div class="d-sec"><h4>Status</h4><div class="steps">${ORDER.map(s=>`<button class="step ${p.status===s?'active':''}" style="--c:${STATUS[s].c};--bg:${STATUS[s].bg}" onclick="setStatus('${p.id}','${s}')">${STATUS[s].label}</button>`).join('')}</div>${p.status==='aprovacao'?`<button class="btn primary" style="margin-top:12px" onclick="setStatus('${p.id}','andamento')">✓ Cliente aprovou: iniciar serviço</button>`:''}</div>
     <div class="d-sec"><h4>Cliente</h4><div class="d-grid"><div><small>Nome</small>${esc(p.cliente)}</div><div><small>Telefone</small>${esc(c.telefone||'—')}</div><div><small>E-mail</small>${esc(c.email||'—')}</div><div><small>CPF / CNPJ</small>${esc(c.documento||'—')}</div>${c.obs?`<div class="full"><small>Observações</small>${esc(c.obs)}</div>`:''}</div></div>
-    ${p.tipo==='servico'?`<div class="d-sec"><h4>Equipamento</h4><div class="d-grid"><div class="full"><small>Equipamento</small>${esc(p.equipamento||'—')}</div><div class="full"><small>Defeito relatado / diagnóstico</small><span style="white-space:pre-wrap">${esc(p.defeito||'—')}</span></div></div></div>`:''}
+    ${p.tipo==='servico'?`<div class="d-sec"><h4>Equipamento</h4><div class="d-grid"><div class="full"><small>Equipamento</small>${esc(p.equipamento||'—')}</div><div class="full"><small>Defeito relatado / diagnóstico</small><span style="white-space:pre-wrap">${esc(p.defeito||'—')}</span></div></div></div>${checklistHTML(p)}`:''}
     <div class="d-sec"><h4>Itens</h4><table class="line-items">${p.itens.map(it=>`<tr><td>${esc(it.nome)}<small>${it.qtd} × ${brl(it.preco)}</small></td><td>${brl(it.qtd*it.preco)}</td></tr>`).join('')}${p.desconto?`<tr><td>Desconto</td><td>− ${brl(p.desconto)}</td></tr>`:''}${p.frete?`<tr><td>Frete</td><td>+ ${brl(p.frete)}</td></tr>`:''}<tr class="total"><td>Total</td><td>${brl(p.total)}</td></tr></table></div>
     ${custosHTML(p)}
     <div class="d-sec"><h4>Prazo</h4><div class="d-grid"><div><small>Entrada</small>${fmtDate(p.data)}</div><div><small>Previsão de entrega</small>${p.entrega?fmtDate(p.entrega)+(p.hora?' às '+p.hora:''):'—'}</div></div></div>
@@ -734,6 +765,18 @@ function openPedido(id){
   </div>
   <div class="drawer-foot"><button class="btn primary" onclick="openPedidoForm('${p.id}')">✎ Editar</button><button class="btn" onclick="printDoc('${p.id}')">⎙ Imprimir / PDF</button><button class="btn" onclick="sendWhats('${p.id}')">WhatsApp</button><button class="btn" onclick="duplicatePedido('${p.id}')">Duplicar</button><button class="btn danger" style="margin-left:auto" onclick="deletePedido('${p.id}')">Excluir</button></div>`;
   $('drawer-bg').classList.add('show');
+}
+function checklistHTML(p){
+  const c=p.checklist;
+  if(!temChecklist(c))return `<div class="d-sec"><h4>Checklist de entrada</h4><div class="sub" style="font-size:12px">Não preenchido. <a href="#" style="color:var(--brand-ink);font-weight:600" onclick="event.preventDefault();openPedidoForm('${p.id}')">Preencher agora</a></div></div>`;
+  const ac=[...(c.acessorios||[]),...(c.outros?[c.outros]:[])],tags=(l,cls='')=>`<div class="ck-tags">${l.map(x=>`<span class="ck-tag ${cls}">${esc(x)}</span>`).join('')}</div>`;
+  return `<div class="d-sec"><h4>Checklist de entrada</h4><div class="d-grid">
+    <div class="full"><small>Acessórios entregues</small>${ac.length?tags(ac):tags(['Somente o equipamento'],'muted')}</div>
+    <div class="full"><small>Estado físico na entrada</small>${c.semDefeitos?tags(['Sem defeitos aparentes'],'ok'):(c.estado||[]).length?tags(c.estado,'warn'):'—'}</div>
+    <div><small>Liga na entrada?</small>${c.liga?`<span class="ck-tag ${c.liga==='sim'?'ok':c.liga==='nao'?'warn':'muted'}">${CK_LIGA[c.liga]}</span>`:'—'}</div>
+    <div><small>Senha de acesso</small>${c.senha?`<span class="senha-box"><span id="senha-${p.id}" data-s="${esc(c.senha)}">••••••</span><button class="btn sm ghost" onclick="const s=$('senha-${p.id}');const v=s.textContent==='••••••';s.textContent=v?s.dataset.s:'••••••';this.textContent=v?'ocultar':'mostrar'">mostrar</button></span>`:'—'}</div>
+    ${c.obs?`<div class="full"><small>Observações do equipamento</small><span style="white-space:pre-wrap">${esc(c.obs)}</span></div>`:''}
+  </div></div>`;
 }
 function closeDrawer(){state.drawer=null;$('drawer-bg').classList.remove('show')}
 function pagamentosHTML(p){
@@ -757,10 +800,10 @@ function setStatus(id,st){
   if(st==='concluido'){const open=(p.pagamentos||[]).filter(x=>!x.pago);if(open.length&&confirm(`Marcar ${open.length>1?`as ${open.length} parcelas em aberto`:'o pagamento em aberto'} (${brl(sum(open,x=>x.valor))}) como recebido hoje?`))open.forEach(x=>{x.pago=true;x.pagoEm=today()})}
   persist();render();if(state.drawer===id)openPedido(id);toast(`Status alterado para "${STATUS[st].label}".`);
 }
-function duplicatePedido(id){const o=db.pedidos.find(x=>x.id===id);if(!o)return;const p={...JSON.parse(JSON.stringify(o)),id:uid(),numero:nextNumero(today()),data:today(),entrega:'',hora:'',status:o.status==='aprovacao'?'aprovacao':'pendente',pagamentos:[],baixa:{},foto:'',legado:'',criadoEm:new Date().toISOString()};if(!withStock(p,()=>{}))return;if(billable(p.status)&&p.total>0)p.pagamentos=genPagamentos(p,{...(p.cond||{}),recebido:false,vencimento:today()});db.pedidos.push(p);persist();render();openPedido(p.id);toast(`Pedido duplicado como ${p.numero}.`)}
+function duplicatePedido(id){const o=db.pedidos.find(x=>x.id===id);if(!o)return;const p={...JSON.parse(JSON.stringify(o)),id:uid(),numero:nextNumero(today()),data:today(),entrega:'',hora:'',status:o.status==='aprovacao'?'aprovacao':'pendente',pagamentos:[],baixa:{},foto:'',legado:'',checklist:null,criadoEm:new Date().toISOString()};if(!withStock(p,()=>{}))return;if(billable(p.status)&&p.total>0)p.pagamentos=genPagamentos(p,{...(p.cond||{}),recebido:false,vencimento:today()});db.pedidos.push(p);persist();render();openPedido(p.id);toast(`Pedido duplicado como ${p.numero}.`)}
 function deletePedido(id){const p=db.pedidos.find(x=>x.id===id);if(!p||!confirm(`Excluir o pedido ${p.numero} de ${p.cliente}? Esta ação não pode ser desfeita.`))return;releaseStock(p);db.despesas.forEach(d=>{if(d.pedidoId===id)d.pedidoId=''});db.pedidos=db.pedidos.filter(x=>x.id!==id);closeDrawer();persist();render();toast('Pedido excluído.')}
 function waLink(phone,text){let d=String(phone||'').replace(/\D/g,'');if(d&&!(d.startsWith('55')&&d.length>=12))d='55'+d;return `https://wa.me/${d}?text=${encodeURIComponent(text)}`}
-function sendWhats(id){const p=db.pedidos.find(x=>x.id===id);if(!p)return;const c=clienteOf(p)||{},emp=db.config.empresa||'InfoZenha',doc=p.status==='aprovacao'?'orçamento':p.tipo==='servico'?'ordem de serviço':'pedido';const txt=`Olá, ${p.cliente.split(' ')[0]}! Aqui é da ${emp}.\n\nSeu ${doc} nº ${p.numero}:\n${p.itens.map(i=>`• ${i.qtd}x ${i.nome}: ${brl(i.qtd*i.preco)}`).join('\n')}${p.desconto?`\nDesconto: − ${brl(p.desconto)}`:''}${p.frete?`\nFrete: ${brl(p.frete)}`:''}\n*Total: ${brl(p.total)}*\n\nStatus: ${STATUS[p.status].label}${p.entrega?`\nPrevisão de entrega: ${fmtDate(p.entrega)}${p.hora?' às '+p.hora:''}`:''}`;if(!c.telefone)toast('Cliente sem telefone: escolha o contato no WhatsApp.');window.open(waLink(c.telefone,txt),'_blank','noopener')}
+function sendWhats(id){const p=db.pedidos.find(x=>x.id===id);if(!p)return;const c=clienteOf(p)||{},emp=db.config.empresa||'InfoZenha',doc=p.status==='aprovacao'?'orçamento':p.tipo==='servico'?'ordem de serviço':'pedido';const txt=`Olá, ${p.cliente.split(' ')[0]}! Aqui é da ${emp}.\n\nSeu ${doc} nº ${p.numero}:\n${p.itens.map(i=>`• ${i.qtd}x ${i.nome}: ${brl(i.qtd*i.preco)}`).join('\n')}${p.desconto?`\nDesconto: − ${brl(p.desconto)}`:''}${p.frete?`\nFrete: ${brl(p.frete)}`:''}\n*Total: ${brl(p.total)}*\n\nStatus: ${STATUS[p.status].label}${p.entrega?`\nPrevisão de entrega: ${fmtDate(p.entrega)}${p.hora?' às '+p.hora:''}`:''}${p.tipo==='servico'&&temChecklist(p.checklist)?(()=>{const ac=[...(p.checklist.acessorios||[]),...(p.checklist.outros?[p.checklist.outros]:[])];return `\nAcessórios deixados: ${ac.length?ac.join(', '):'somente o equipamento'}`})():''}`;if(!c.telefone)toast('Cliente sem telefone: escolha o contato no WhatsApp.');window.open(waLink(c.telefone,txt),'_blank','noopener')}
 
 // ============ Agenda ============
 function renderAgenda(){
@@ -888,12 +931,13 @@ function printDoc(id){
   w.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${title} ${x.numero}</title><style>body{font:13px Arial,sans-serif;color:#1F2226;max-width:780px;margin:30px auto;padding:20px}header{display:flex;justify-content:space-between;align-items:center;gap:20px;border-bottom:3px solid #F8601A;padding-bottom:15px}header img{max-width:170px;max-height:80px;object-fit:contain}.emp{font-size:12px;color:#5E6368;margin-top:6px;line-height:1.5}.tag{background:#FFF0E8;padding:8px 14px;border-radius:20px;color:#C44A0E;font-weight:bold;white-space:nowrap}.meta{text-align:right;font-size:12px;color:#5E6368;margin-top:8px}h3{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:#5E6368;margin:0 0 8px}section{margin:20px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 20px}small{color:#5E6368}table{width:100%;border-collapse:collapse}th{text-align:left;font-size:11px;color:#5E6368;border-bottom:2px solid #E9E9EB;padding:8px}td{padding:9px 8px;border-bottom:1px solid #E9E9EB}.r{text-align:right;white-space:nowrap}.total td{font-size:17px;font-weight:bold;border:0}.box{background:#F6F6F7;border-radius:8px;padding:12px 14px;white-space:pre-wrap}.sign{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:60px;text-align:center;font-size:12px;color:#5E6368}.sign div{border-top:1px solid #1F2226;padding-top:6px}.foot{border-top:1px solid #E9E9EB;padding-top:12px;color:#5E6368;font-size:11px;margin-top:30px}img.foto{max-width:100%;max-height:260px;object-fit:contain;border-radius:8px}@media print{body{margin:0 auto}}</style></head><body>
 <header><div><img src="${logo}" alt="${esc(emp)}"><div class="emp">${[c.cnpj?'CNPJ/CPF '+esc(c.cnpj):'',esc(c.telefone||''),esc(c.email||''),esc(c.endereco||'')].filter(Boolean).join(' · ')}</div></div><div><span class="tag">${title} Nº ${x.numero}</span><div class="meta">Emitido em ${fmtDate(today())}</div></div></header>
 <section><h3>Cliente</h3><div class="grid"><div><b>${esc(x.cliente)}</b></div><div>${esc(cl.telefone||'')}</div><div>${esc(cl.email||'')}</div><div>${cl.documento?'CPF/CNPJ: '+esc(cl.documento):''}</div>${cl.endereco?`<div style="grid-column:1/-1">${esc(cl.endereco)}</div>`:''}</div></section>
-${x.tipo==='servico'?`<section><h3>Equipamento</h3><div><b>${esc(x.equipamento||'—')}</b></div>${x.defeito?`<div style="margin-top:6px"><small>Defeito relatado / diagnóstico:</small><br>${esc(x.defeito)}</div>`:''}</section>`:''}
+${x.tipo==='servico'?`<section><h3>Equipamento</h3><div><b>${esc(x.equipamento||'—')}</b></div>${x.defeito?`<div style="margin-top:6px"><small>Defeito relatado / diagnóstico:</small><br>${esc(x.defeito)}</div>`:''}</section>${temChecklist(x.checklist)?(()=>{const c=x.checklist,ac=[...(c.acessorios||[]),...(c.outros?[c.outros]:[])];return `<section><h3>Checklist de entrada</h3><table class="ck"><tr><td style="width:34%"><b>Acessórios entregues</b></td><td>${esc(ac.length?ac.join(', '):'Somente o equipamento')}</td></tr><tr><td><b>Estado físico na entrada</b></td><td>${esc(c.semDefeitos?'Sem defeitos aparentes':(c.estado||[]).length?c.estado.join(', '):'Não informado')}</td></tr><tr><td><b>Liga na entrada?</b></td><td>${c.liga?CK_LIGA[c.liga]:'Não informado'}</td></tr>${c.obs?`<tr><td><b>Observações do equipamento</b></td><td style="white-space:pre-wrap">${esc(c.obs)}</td></tr>`:''}</table></section>`})():''}`:''}
 <section><table><tr><th>Descrição</th><th class="r">Qtd</th><th class="r">Valor unit.</th><th class="r">Subtotal</th></tr>${x.itens.map(i=>`<tr><td>${esc(i.nome)}</td><td class="r">${i.qtd}</td><td class="r">${brl(i.preco)}</td><td class="r">${brl(i.qtd*i.preco)}</td></tr>`).join('')}${x.desconto?`<tr><td colspan="3">Desconto</td><td class="r">− ${brl(x.desconto)}</td></tr>`:''}${x.frete?`<tr><td colspan="3">Frete</td><td class="r">+ ${brl(x.frete)}</td></tr>`:''}<tr class="total"><td colspan="3">Total</td><td class="r">${brl(x.total)}</td></tr></table></section>
 <section class="grid"><div><h3>Datas</h3>Entrada: ${fmtDate(x.data)}${x.entrega?`<br>Previsão de entrega: ${fmtDate(x.entrega)}${x.hora?' às '+x.hora:''}`:''}</div><div><h3>Pagamento</h3>${ps.length?ps.map(p=>`${p.de>1?p.parcela+'/'+p.de+' · ':''}${brl(p.valor)} · ${esc(p.forma||'')} · ${p.pago?'pago em '+fmtDate(p.pagoEm):'vence '+fmtDate(p.vencimento)}`).join('<br>'):esc(x.cond?.forma||'A combinar')}</div></section>
 ${x.obs?`<section><h3>Observações</h3><div class="box">${esc(x.obs)}</div></section>`:''}
 ${x.foto?`<section><img class="foto" src="${x.foto}"></section>`:''}
 ${garantia?`<section><h3>${x.status==='aprovacao'?'Validade':'Garantia'}</h3><div class="box">${esc(garantia)}</div></section>`:''}
+${x.tipo==='servico'&&temChecklist(x.checklist)?'<p style="margin:26px 0 0;font-size:12px;color:#5E6368">Declaro que entreguei o equipamento e os acessórios nas condições descritas no checklist de entrada acima.</p>':''}
 <div class="sign"><div>${esc(x.cliente)}<br>Assinatura do cliente</div><div>${esc(emp)}</div></div>
 <div class="foot">Documento gerado pela ${esc(emp)} · Status: ${STATUS[x.status].label}</div>
 <script>window.onload=()=>window.print()<\/script></body></html>`);w.document.close();
