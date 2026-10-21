@@ -221,6 +221,10 @@ svg.i{flex-shrink:0}
 .ck-tags{display:flex;flex-wrap:wrap;gap:5px}
 .ck-tag{border-radius:20px;padding:3px 9px;font-size:11px;font-weight:600;background:var(--brand-soft);color:var(--brand-ink)}
 .ck-tag.warn{background:#FEF3C7;color:#92400E}.ck-tag.ok{background:#DCFCE7;color:#15803D}.ck-tag.muted{background:#F1F1F2;color:#6B7075}
+.pdf-prev{max-height:64vh;overflow:auto;background:#E9E9EB;border-radius:9px;padding:10px;display:grid;gap:10px;-webkit-overflow-scrolling:touch}
+.pdf-prev img{display:block;width:100%;height:auto;background:#fff;border-radius:2px;box-shadow:0 2px 10px #1F222626;cursor:zoom-in}
+.pdf-prev.zoom img{width:230%;max-width:none;cursor:zoom-out}
+.pdf-dica{font-size:11px;color:var(--muted);text-align:center;margin-top:6px}
 .senha-box{display:inline-flex;align-items:center;gap:8px;font-family:monospace;font-size:13px}
 .items{grid-column:1/-1;border:1px solid var(--line);border-radius:9px;overflow:hidden}
 .item-row{display:grid;grid-template-columns:1fr 64px 110px 100px 30px;gap:8px;padding:8px 10px;border-bottom:1px solid #F1F1F2;align-items:center}
@@ -934,25 +938,38 @@ async function gerarPDF(x){
   try{
     await new Promise(r=>{ifr.onload=r;ifr.srcdoc=docHTML(x,true)});
     const doc=ifr.contentDocument;await Promise.all([...doc.images].map(i=>i.complete?0:new Promise(r=>{i.onload=i.onerror=r})));
-    const h=Math.max(doc.body.scrollHeight,1123),scale=Math.min(2,Math.sqrt(14e6/(794*h)));
+    const h=Math.ceil(doc.documentElement.scrollHeight),scale=Math.min(2,Math.sqrt(14e6/(794*h)));
     const canvas=await html2canvas(doc.body,{scale,backgroundColor:'#ffffff',useCORS:true,windowWidth:794,windowHeight:h});
-    const {jsPDF}=window.jspdf,pdf=new jsPDF({unit:'mm',format:'a4',compress:true}),pageH=Math.floor(canvas.width*297/210);
-    for(let y=0,pg=0;y<canvas.height;y+=pageH,pg++){const part=document.createElement('canvas');part.width=canvas.width;part.height=Math.min(pageH,canvas.height-y);part.getContext('2d').drawImage(canvas,0,y,canvas.width,part.height,0,0,canvas.width,part.height);if(pg)pdf.addPage();pdf.addImage(part.toDataURL('image/jpeg',.9),'JPEG',0,0,210,part.height*210/canvas.width)}
-    return pdf.output('blob');
+    // Cabe em uma folha (ou passa só um pouco): uma página só, levemente reduzida se preciso.
+    // Mais longo: divide em folhas A4 e descarta pedaços que sobrem em branco no fim.
+    const pageH=Math.floor(canvas.width*297/210),pages=[];
+    if(canvas.height<=pageH*1.1)pages.push(canvas);
+    else for(let y=0;y<canvas.height;y+=pageH){const part=document.createElement('canvas');part.width=canvas.width;part.height=Math.min(pageH,canvas.height-y);part.getContext('2d').drawImage(canvas,0,y,canvas.width,part.height,0,0,canvas.width,part.height);if(!pages.length||!canvasVazio(part))pages.push(part)}
+    const {jsPDF}=window.jspdf,pdf=new jsPDF({unit:'mm',format:'a4',compress:true}),paginas=[];
+    pages.forEach((c,i)=>{const img=c.toDataURL('image/jpeg',.9);paginas.push(img);if(i)pdf.addPage();let w=210,hmm=c.height*210/c.width;if(hmm>297){w=210*297/hmm;hmm=297}pdf.addImage(img,'JPEG',(210-w)/2,0,w,hmm)});
+    return{blob:pdf.output('blob'),paginas};
   }finally{ifr.remove()}
 }
+// Pedaço de página só com branco (sobra de margem no fim do documento)
+function canvasVazio(c){const d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;for(let i=0;i<d.length;i+=16)if(d[i]<244||d[i+1]<244||d[i+2]<244)return false;return true}
 const nomeArquivo=s=>String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^\w-]+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
+let pdfAtual=null;
+function baixarPDFAtual(){if(!pdfAtual)return;const a=document.createElement('a');a.href=URL.createObjectURL(pdfAtual.blob);a.download=pdfAtual.nome;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),4000)}
 async function enviarPDF(id){
   const x=db.pedidos.find(p=>p.id===id);if(!x)return;
   const doc=x.status==='aprovacao'?'Orçamento':x.tipo==='servico'?'Ordem de serviço':'Pedido',emp=db.config.empresa||'InfoZenha';
   toast('Gerando o PDF…');
-  let blob;try{blob=await gerarPDF(x)}catch(e){toast('Não foi possível gerar o PDF: '+(e.message||e)+'. Use "Imprimir / PDF".');return}
-  const nome=`${nomeArquivo(doc)}-${x.numero}-${nomeArquivo(x.cliente)}.pdf`,file=new File([blob],nome,{type:'application/pdf'});
-  const podeCompartilhar=!!(navigator.canShare&&navigator.canShare({files:[file]}));
-  const baixar=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=nome;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),4000)};
-  showModal({title:'PDF pronto',sub:'',body:`<div style="display:flex;gap:12px;align-items:center;padding:6px 0 2px"><div style="width:44px;height:54px;border-radius:6px;background:var(--brand-soft);color:var(--brand-ink);display:grid;place-items:center;font:800 11px Manrope,sans-serif;flex-shrink:0">PDF</div><div style="min-width:0"><b style="display:block;overflow-wrap:anywhere">${esc(nome)}</b><span class="sub" style="font-size:12px">${(blob.size/1024).toFixed(0)} KB · ${esc(doc)} nº ${x.numero}</span></div></div>${podeCompartilhar?'<p style="margin:12px 0 0">Toque em <b>Compartilhar</b> e escolha o <b>WhatsApp</b> (ou e-mail, Arquivos…).</p>':'<p style="margin:12px 0 0">Este navegador não envia arquivos direto. Baixe o PDF e anexe na conversa do WhatsApp.</p>'}`,
-    save:podeCompartilhar?'Compartilhar':'⇩ Baixar PDF',extra:podeCompartilhar?{label:'⇩ Baixar',cls:'',onClick:()=>{baixar();closeModal()}}:null,
-    onSave:async()=>{if(!podeCompartilhar){baixar();return}try{await navigator.share({files:[file],title:nome,text:`${doc} nº ${x.numero} · ${emp}`})}catch(e){if(e.name!=='AbortError'){baixar();toast('O compartilhamento falhou; o PDF foi baixado.')}}}});
+  let r;try{r=await gerarPDF(x)}catch(e){toast('Não foi possível gerar o PDF: '+(e.message||e)+'. Use "Imprimir".');return}
+  const nome=`${nomeArquivo(doc)}-${x.numero}-${nomeArquivo(x.cliente)}.pdf`,file=new File([r.blob],nome,{type:'application/pdf'});
+  pdfAtual={blob:r.blob,nome};clearTimeout(toastTimer);$('toast').classList.remove('show');
+  const podeCompartilhar=!!(navigator.canShare&&navigator.canShare({files:[file]})),n=r.paginas.length;
+  // Pré-visualização: mostra as páginas exatamente como estão no PDF, antes de enviar
+  showModal({title:'Pré-visualização do PDF',sub:`${doc} nº ${x.numero} · ${n} ${n>1?'páginas':'página'} · ${(r.blob.size/1024).toFixed(0)} KB`,wide:true,
+    body:`<div class="pdf-prev" title="Toque para ampliar" onclick="this.classList.toggle('zoom')">${r.paginas.map((src,i)=>`<img src="${src}" alt="Página ${i+1} do PDF">`).join('')}</div><div class="pdf-dica">Toque na página para ampliar e conferir os detalhes</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px"><span class="sub" style="font-size:12px">${podeCompartilhar?'Confira o documento. Se estiver tudo certo, toque em <b>Compartilhar</b> e escolha o <b>WhatsApp</b>.':'Confira o documento e baixe o PDF para anexar no WhatsApp.'}</span>${podeCompartilhar?'<button type="button" class="btn sm" onclick="baixarPDFAtual()">⇩ Baixar</button>':''}</div>`,
+    save:podeCompartilhar?'Compartilhar':'⇩ Baixar PDF',
+    extra:{label:'✎ Corrigir pedido',cls:'',onClick:()=>{closeModal();openPedidoForm(x.id)}},
+    onSave:async()=>{if(!podeCompartilhar){baixarPDFAtual();return}try{await navigator.share({files:[file],title:nome,text:`${doc} nº ${x.numero} · ${emp}`})}catch(e){if(e.name==='AbortError')return false;baixarPDFAtual();toast('O compartilhamento falhou; o PDF foi baixado.')}}});
 }
 // Documento do pedido (orçamento, OS ou venda). paraPDF: sem o comando de impressão automática
 function docHTML(x,paraPDF=false){
