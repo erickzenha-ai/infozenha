@@ -633,7 +633,7 @@ document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if($('modal-b
 
 // ============ Modal genérico ============
 let modalSave=null;
-function showModal({title,sub='',body,save='Salvar',wide=false,onSave,extra=null}){$('modal-title').textContent=title;$('modal-sub').textContent=sub;$('modal-sub').style.display=sub?'':'none';$('modal-body').innerHTML=body;$('modal-box').classList.toggle('wide',wide);$('save-btn').textContent=save;$('save-btn').disabled=false;const x=$('modal-extra');x.style.display=extra?'':'none';if(extra){x.textContent=extra.label;x.onclick=extra.onClick}modalSave=onSave;$('modal-bg').classList.add('show');setTimeout(()=>{const f=$('modal-body').querySelector('input:not([type=file]):not([type=checkbox]),select,textarea');f&&f.focus()},60)}
+function showModal({title,sub='',body,save='Salvar',wide=false,onSave,extra=null}){$('modal-title').textContent=title;$('modal-sub').textContent=sub;$('modal-sub').style.display=sub?'':'none';$('modal-body').innerHTML=body;$('modal-box').classList.toggle('wide',wide);$('save-btn').textContent=save;$('save-btn').disabled=false;const x=$('modal-extra');x.style.display=extra?'':'none';x.className='btn '+(extra?.cls??'danger');if(extra){x.textContent=extra.label;x.onclick=extra.onClick}modalSave=onSave;$('modal-bg').classList.add('show');setTimeout(()=>{const f=$('modal-body').querySelector('input:not([type=file]):not([type=checkbox]),select,textarea');f&&f.focus()},60)}
 function closeModal(){$('modal-bg').classList.remove('show');modalSave=null}
 async function saveModal(e){e.preventDefault();if(!modalSave)return;const b=$('save-btn');b.disabled=true;try{const ok=await modalSave();if(ok!==false)closeModal()}finally{b.disabled=false}}
 $('modal-form').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.closest('.item-row,.totals'))e.preventDefault()});
@@ -763,7 +763,7 @@ function openPedido(id){
     ${p.obs?`<div class="d-sec"><h4>Observações</h4><div style="font-size:12px;white-space:pre-wrap">${esc(p.obs)}</div></div>`:''}
     ${p.foto?`<div class="d-sec"><h4>Foto</h4><img class="photo" src="${p.foto}" alt="Foto do equipamento"></div>`:''}
   </div>
-  <div class="drawer-foot"><button class="btn primary" onclick="openPedidoForm('${p.id}')">✎ Editar</button><button class="btn" onclick="printDoc('${p.id}')">⎙ Imprimir / PDF</button><button class="btn" onclick="sendWhats('${p.id}')">WhatsApp</button><button class="btn" onclick="duplicatePedido('${p.id}')">Duplicar</button><button class="btn danger" style="margin-left:auto" onclick="deletePedido('${p.id}')">Excluir</button></div>`;
+  <div class="drawer-foot"><button class="btn primary" onclick="openPedidoForm('${p.id}')">✎ Editar</button><button class="btn" onclick="enviarPDF('${p.id}')">📄 Enviar PDF</button><button class="btn" onclick="printDoc('${p.id}')">⎙ Imprimir</button><button class="btn" onclick="sendWhats('${p.id}')">WhatsApp</button><button class="btn" onclick="duplicatePedido('${p.id}')">Duplicar</button><button class="btn danger" style="margin-left:auto" onclick="deletePedido('${p.id}')">Excluir</button></div>`;
   $('drawer-bg').classList.add('show');
 }
 function checklistHTML(p){
@@ -923,13 +923,45 @@ function downloadBackup(){db.config.ultimoBackup=today();persist();const a=docum
 function restoreBackup(file){if(!file)return;const r=new FileReader();r.onload=()=>{let data;try{data=JSON.parse(r.result);if(!data||!Array.isArray(data.clientes))throw 0}catch{toast('Arquivo de backup inválido.');return}if(!confirm('Restaurar este backup? Os dados atuais deste navegador serão substituídos.'))return;try{localStorage.setItem(STORE+'-antes-restauracao',JSON.stringify(db))}catch{}db=data;migrate(r.result);persist();applyBrand();closeDrawer();render();toast('Backup restaurado.')};r.readAsText(file)}
 
 // ============ Documento para impressão ============
-function printDoc(id){
-  const x=db.pedidos.find(p=>p.id===id);if(!x)return;const c=db.config,cl=clienteOf(x)||{},emp=c.empresa||'InfoZenha',ps=x.pagamentos||[];
-  const title=x.status==='aprovacao'?'ORÇAMENTO':x.tipo==='servico'?'ORDEM DE SERVIÇO':'PEDIDO DE VENDA',logo=c.logo||new URL('InfoZenha-logo.png',location.href).href;
-  const w=window.open('','_blank');if(!w){toast('Permita a abertura de pop-ups para imprimir.');return}
+function printDoc(id){const x=db.pedidos.find(p=>p.id===id);if(!x)return;const w=window.open('','_blank');if(!w){toast('Permita a abertura de pop-ups para imprimir.');return}w.document.write(docHTML(x));w.document.close()}
+// ============ PDF para enviar (WhatsApp, e-mail...) ============
+// Gera o PDF no próprio aparelho e usa o "Compartilhar" do celular. As bibliotecas só são baixadas na primeira vez.
+function loadScript(src){return new Promise((ok,no)=>{if(src.includes('html2canvas')?window.html2canvas:window.jspdf)return ok();const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=()=>no(new Error('sem internet para preparar o PDF'));document.head.appendChild(s)})}
+async function gerarPDF(x){
+  await loadScript('https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js');
+  await loadScript('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js');
+  const ifr=document.createElement('iframe');ifr.setAttribute('aria-hidden','true');ifr.style.cssText='position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;background:#fff';document.body.appendChild(ifr);
+  try{
+    await new Promise(r=>{ifr.onload=r;ifr.srcdoc=docHTML(x,true)});
+    const doc=ifr.contentDocument;await Promise.all([...doc.images].map(i=>i.complete?0:new Promise(r=>{i.onload=i.onerror=r})));
+    const h=Math.max(doc.body.scrollHeight,1123),scale=Math.min(2,Math.sqrt(14e6/(794*h)));
+    const canvas=await html2canvas(doc.body,{scale,backgroundColor:'#ffffff',useCORS:true,windowWidth:794,windowHeight:h});
+    const {jsPDF}=window.jspdf,pdf=new jsPDF({unit:'mm',format:'a4',compress:true}),pageH=Math.floor(canvas.width*297/210);
+    for(let y=0,pg=0;y<canvas.height;y+=pageH,pg++){const part=document.createElement('canvas');part.width=canvas.width;part.height=Math.min(pageH,canvas.height-y);part.getContext('2d').drawImage(canvas,0,y,canvas.width,part.height,0,0,canvas.width,part.height);if(pg)pdf.addPage();pdf.addImage(part.toDataURL('image/jpeg',.9),'JPEG',0,0,210,part.height*210/canvas.width)}
+    return pdf.output('blob');
+  }finally{ifr.remove()}
+}
+const nomeArquivo=s=>String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^\w-]+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
+async function enviarPDF(id){
+  const x=db.pedidos.find(p=>p.id===id);if(!x)return;
+  const doc=x.status==='aprovacao'?'Orçamento':x.tipo==='servico'?'Ordem de serviço':'Pedido',emp=db.config.empresa||'InfoZenha';
+  toast('Gerando o PDF…');
+  let blob;try{blob=await gerarPDF(x)}catch(e){toast('Não foi possível gerar o PDF: '+(e.message||e)+'. Use "Imprimir / PDF".');return}
+  const nome=`${nomeArquivo(doc)}-${x.numero}-${nomeArquivo(x.cliente)}.pdf`,file=new File([blob],nome,{type:'application/pdf'});
+  const podeCompartilhar=!!(navigator.canShare&&navigator.canShare({files:[file]}));
+  const baixar=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=nome;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),4000)};
+  showModal({title:'PDF pronto',sub:'',body:`<div style="display:flex;gap:12px;align-items:center;padding:6px 0 2px"><div style="width:44px;height:54px;border-radius:6px;background:var(--brand-soft);color:var(--brand-ink);display:grid;place-items:center;font:800 11px Manrope,sans-serif;flex-shrink:0">PDF</div><div style="min-width:0"><b style="display:block;overflow-wrap:anywhere">${esc(nome)}</b><span class="sub" style="font-size:12px">${(blob.size/1024).toFixed(0)} KB · ${esc(doc)} nº ${x.numero}</span></div></div>${podeCompartilhar?'<p style="margin:12px 0 0">Toque em <b>Compartilhar</b> e escolha o <b>WhatsApp</b> (ou e-mail, Arquivos…).</p>':'<p style="margin:12px 0 0">Este navegador não envia arquivos direto. Baixe o PDF e anexe na conversa do WhatsApp.</p>'}`,
+    save:podeCompartilhar?'Compartilhar':'⇩ Baixar PDF',extra:podeCompartilhar?{label:'⇩ Baixar',cls:'',onClick:()=>{baixar();closeModal()}}:null,
+    onSave:async()=>{if(!podeCompartilhar){baixar();return}try{await navigator.share({files:[file],title:nome,text:`${doc} nº ${x.numero} · ${emp}`})}catch(e){if(e.name!=='AbortError'){baixar();toast('O compartilhamento falhou; o PDF foi baixado.')}}}});
+}
+// Documento do pedido (orçamento, OS ou venda). paraPDF: sem o comando de impressão automática
+function docHTML(x,paraPDF=false){
+  const c=db.config,cl=clienteOf(x)||{},emp=c.empresa||'InfoZenha',ps=x.pagamentos||[];
+  // No arquivo local (file://) a imagem da logo não pode ir para o PDF: usa o nome da empresa no lugar
+  const title=x.status==='aprovacao'?'ORÇAMENTO':x.tipo==='servico'?'ORDEM DE SERVIÇO':'PEDIDO DE VENDA',logo=c.logo||(paraPDF&&location.protocol==='file:'?'':new URL('InfoZenha-logo.png',location.href).href);
   const garantia=x.status==='aprovacao'?'Orçamento válido por 7 dias a partir da data de emissão.':c.garantia;
-  w.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${title} ${x.numero}</title><style>body{font:13px Arial,sans-serif;color:#1F2226;max-width:780px;margin:30px auto;padding:20px}header{display:flex;justify-content:space-between;align-items:center;gap:20px;border-bottom:3px solid #F8601A;padding-bottom:15px}header img{max-width:170px;max-height:80px;object-fit:contain}.emp{font-size:12px;color:#5E6368;margin-top:6px;line-height:1.5}.tag{background:#FFF0E8;padding:8px 14px;border-radius:20px;color:#C44A0E;font-weight:bold;white-space:nowrap}.meta{text-align:right;font-size:12px;color:#5E6368;margin-top:8px}h3{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:#5E6368;margin:0 0 8px}section{margin:20px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 20px}small{color:#5E6368}table{width:100%;border-collapse:collapse}th{text-align:left;font-size:11px;color:#5E6368;border-bottom:2px solid #E9E9EB;padding:8px}td{padding:9px 8px;border-bottom:1px solid #E9E9EB}.r{text-align:right;white-space:nowrap}.total td{font-size:17px;font-weight:bold;border:0}.box{background:#F6F6F7;border-radius:8px;padding:12px 14px;white-space:pre-wrap}.sign{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:60px;text-align:center;font-size:12px;color:#5E6368}.sign div{border-top:1px solid #1F2226;padding-top:6px}.foot{border-top:1px solid #E9E9EB;padding-top:12px;color:#5E6368;font-size:11px;margin-top:30px}img.foto{max-width:100%;max-height:260px;object-fit:contain;border-radius:8px}@media print{body{margin:0 auto}}</style></head><body>
-<header><div><img src="${logo}" alt="${esc(emp)}"><div class="emp">${[c.cnpj?'CNPJ/CPF '+esc(c.cnpj):'',esc(c.telefone||''),esc(c.email||''),esc(c.endereco||'')].filter(Boolean).join(' · ')}</div></div><div><span class="tag">${title} Nº ${x.numero}</span><div class="meta">Emitido em ${fmtDate(today())}</div></div></header>
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${title} ${x.numero}</title><style>body{font:13px Arial,sans-serif;color:#1F2226;max-width:780px;margin:30px auto;padding:20px}header{display:flex;justify-content:space-between;align-items:center;gap:20px;border-bottom:3px solid #F8601A;padding-bottom:15px}header img{max-width:170px;max-height:80px;object-fit:contain}.emp{font-size:12px;color:#5E6368;margin-top:6px;line-height:1.5}.tag{background:#FFF0E8;padding:8px 14px;border-radius:20px;color:#C44A0E;font-weight:bold;white-space:nowrap}.meta{text-align:right;font-size:12px;color:#5E6368;margin-top:8px}h3{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:#5E6368;margin:0 0 8px}section{margin:20px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 20px}small{color:#5E6368}table{width:100%;border-collapse:collapse}th{text-align:left;font-size:11px;color:#5E6368;border-bottom:2px solid #E9E9EB;padding:8px}td{padding:9px 8px;border-bottom:1px solid #E9E9EB}.r{text-align:right;white-space:nowrap}.total td{font-size:17px;font-weight:bold;border:0}.box{background:#F6F6F7;border-radius:8px;padding:12px 14px;white-space:pre-wrap}.sign{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:60px;text-align:center;font-size:12px;color:#5E6368}.sign div{border-top:1px solid #1F2226;padding-top:6px}.foot{border-top:1px solid #E9E9EB;padding-top:12px;color:#5E6368;font-size:11px;margin-top:30px}img.foto{max-width:100%;max-height:260px;object-fit:contain;border-radius:8px}@media print{body{margin:0 auto}}</style></head><body>
+<header><div>${logo?`<img src="${logo}" alt="${esc(emp)}">`:`<div style="font:bold 24px Arial,sans-serif;color:#F8601A">${esc(emp)}</div>`}<div class="emp">${[c.cnpj?'CNPJ/CPF '+esc(c.cnpj):'',esc(c.telefone||''),esc(c.email||''),esc(c.endereco||'')].filter(Boolean).join(' · ')}</div></div><div><span class="tag">${title} Nº ${x.numero}</span><div class="meta">Emitido em ${fmtDate(today())}</div></div></header>
 <section><h3>Cliente</h3><div class="grid"><div><b>${esc(x.cliente)}</b></div><div>${esc(cl.telefone||'')}</div><div>${esc(cl.email||'')}</div><div>${cl.documento?'CPF/CNPJ: '+esc(cl.documento):''}</div>${cl.endereco?`<div style="grid-column:1/-1">${esc(cl.endereco)}</div>`:''}</div></section>
 ${x.tipo==='servico'?`<section><h3>Equipamento</h3><div><b>${esc(x.equipamento||'—')}</b></div>${x.defeito?`<div style="margin-top:6px"><small>Defeito relatado / diagnóstico:</small><br>${esc(x.defeito)}</div>`:''}</section>${temChecklist(x.checklist)?(()=>{const c=x.checklist,ac=[...(c.acessorios||[]),...(c.outros?[c.outros]:[])];return `<section><h3>Checklist de entrada</h3><table class="ck"><tr><td style="width:34%"><b>Acessórios entregues</b></td><td>${esc(ac.length?ac.join(', '):'Somente o equipamento')}</td></tr><tr><td><b>Estado físico na entrada</b></td><td>${esc(c.semDefeitos?'Sem defeitos aparentes':(c.estado||[]).length?c.estado.join(', '):'Não informado')}</td></tr><tr><td><b>Liga na entrada?</b></td><td>${c.liga?CK_LIGA[c.liga]:'Não informado'}</td></tr>${c.obs?`<tr><td><b>Observações do equipamento</b></td><td style="white-space:pre-wrap">${esc(c.obs)}</td></tr>`:''}</table></section>`})():''}`:''}
 <section><table><tr><th>Descrição</th><th class="r">Qtd</th><th class="r">Valor unit.</th><th class="r">Subtotal</th></tr>${x.itens.map(i=>`<tr><td>${esc(i.nome)}</td><td class="r">${i.qtd}</td><td class="r">${brl(i.preco)}</td><td class="r">${brl(i.qtd*i.preco)}</td></tr>`).join('')}${x.desconto?`<tr><td colspan="3">Desconto</td><td class="r">− ${brl(x.desconto)}</td></tr>`:''}${x.frete?`<tr><td colspan="3">Frete</td><td class="r">+ ${brl(x.frete)}</td></tr>`:''}<tr class="total"><td colspan="3">Total</td><td class="r">${brl(x.total)}</td></tr></table></section>
@@ -940,7 +972,7 @@ ${garantia?`<section><h3>${x.status==='aprovacao'?'Validade':'Garantia'}</h3><di
 ${x.tipo==='servico'&&temChecklist(x.checklist)?'<p style="margin:26px 0 0;font-size:12px;color:#5E6368">Declaro que entreguei o equipamento e os acessórios nas condições descritas no checklist de entrada acima.</p>':''}
 <div class="sign"><div>${esc(x.cliente)}<br>Assinatura do cliente</div><div>${esc(emp)}</div></div>
 <div class="foot">Documento gerado pela ${esc(emp)} · Status: ${STATUS[x.status].label}</div>
-<script>window.onload=()=>window.print()<\/script></body></html>`);w.document.close();
+${paraPDF?'':'<script>window.onload=()=>window.print()<\/script>'}</body></html>`;
 }
 
 // ============ Importação de clientes do Google Contatos (Google CSV ou vCard) ============
