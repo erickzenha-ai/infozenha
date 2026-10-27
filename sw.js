@@ -1,7 +1,7 @@
 // Service worker do InfoZenha: permite abrir o app sem internet.
 // A página é buscada na rede primeiro (para receber atualizações) e cai no cache quando está offline.
-const CACHE = 'infozenha-20261021133653';
-const ARQUIVOS = ['./', './gestao-comercial.html', './manifest.webmanifest', './InfoZenha-logo.png', './InfoZenha-simbolo.png', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
+const CACHE = 'infozenha-20261026214651';
+const ARQUIVOS = ['./', './gestao-comercial.html', './manifest.webmanifest', './InfoZenha-logo.png', './InfoZenha-simbolo.png', './icons/icon-192-v2.png', './icons/icon-512-v2.png', './icons/apple-touch-icon-v2.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ARQUIVOS)).then(() => self.skipWaiting()));

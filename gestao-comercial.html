@@ -5,7 +5,7 @@
 <title>InfoZenha | Gestão de serviços</title>
 <link rel="icon" href="InfoZenha-simbolo.png">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon-v2.png">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="InfoZenha"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
@@ -269,6 +269,8 @@ input.money{font-variant-numeric:tabular-nums}.item-row input.money,.totals inpu
 .line-items small{display:block;color:#8C9095}
 .line-items tr.total td{border:0;font-weight:800;font-size:14px;padding-top:10px}
 .photo{max-width:100%;max-height:220px;border-radius:9px;border:1px solid var(--line)}
+.fotos-form{display:grid;gap:8px;margin-bottom:8px}.foto-row{display:grid;grid-template-columns:64px 1fr auto;gap:10px;align-items:center}.foto-row img{width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid var(--line)}
+.fotos-galeria{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}.fotos-galeria figure{margin:0}.fotos-galeria img{width:100%;height:110px;object-fit:cover;border-radius:8px;border:1px solid var(--line);cursor:zoom-in}.fotos-galeria figcaption{font-size:11px;color:var(--muted);margin-top:4px}
 
 /* Agenda */
 .cal-wrap{display:grid;grid-template-columns:1fr 340px;gap:16px}
@@ -683,11 +685,14 @@ function renderPedidos(){
   $('ped-foot').textContent=rows.length?`${rows.length} ${rows.length===1?'pedido':'pedidos'} · total ${brl(sum(rows.filter(p=>p.status!=='cancelado'),p=>p.total))}`:'';
 }
 
-let formItems=[],formTipo='servico';
+// Fotos do pedido: até 5, cada uma com título. Pedidos antigos guardavam uma só em "foto".
+const MAX_FOTOS=5;
+const fotosDe=p=>p.fotos?.length?p.fotos:(p.foto?[{src:p.foto,titulo:''}]:[]);
+let formItems=[],formTipo='servico',formFotos=[];
 function openPedidoForm(id,preset={}){
   const p=id?db.pedidos.find(x=>x.id===id):null;
   const d=p?JSON.parse(JSON.stringify(p)):{tipo:'servico',status:'pendente',cliente:'',equipamento:'',defeito:'',obs:'',itens:[{nome:'',qtd:1,preco:0}],desconto:0,data:today(),entrega:'',hora:'',cond:{forma:db.config.pagamentos[0]||'',parcelas:1,vencimento:today(),recebido:false},...preset};
-  formItems=d.itens.map(i=>({...i}));formTipo=d.tipo;
+  formItems=d.itens.map(i=>({...i}));formTipo=d.tipo;formFotos=fotosDe(d).map(f=>({...f}));
   const ck={acessorios:[],estado:[],outros:'',semDefeitos:false,liga:'',senha:'',obs:'',...(d.checklist||{})};
   const locked=p&&(p.pagamentos||[]).some(x=>x.pago),c=d.cond||{};
   const body=`<div class="form">
@@ -714,13 +719,25 @@ function openPedidoForm(id,preset={}){
   <div class="field"><label>1º vencimento</label><input type="date" name="vencimento" value="${c.vencimento||d.data}"></div>
   <div class="field" style="align-self:end;padding-bottom:8px"><label class="check"><input type="checkbox" name="recebido" ${c.recebido?'checked':''}> Pagamento já recebido</label></div>
   <div class="field full"><span class="hint">Orçamentos (aguardando aprovação) só geram cobrança depois de aprovados.</span></div>`}
-  <div class="form-section">Observações e foto</div>
+  <div class="form-section">Observações e fotos</div>
   <div class="field full"><label>Observações (aparecem no documento impresso)</label><textarea name="obs">${esc(d.obs)}</textarea></div>
-  <div class="field full"><label>Foto do equipamento ou produto (opcional)</label><input type="file" name="foto" accept="image/*">${d.foto?'<span class="hint">Já existe uma foto. Escolha outra para substituir.</span>':''}</div></div>`;
+  <div class="field full"><label>Fotos do equipamento ou produto (até ${MAX_FOTOS}, opcional)</label><div id="f-fotos" class="fotos-form"></div><input type="file" id="f-foto-input" accept="image/*" multiple onchange="addFormFotos(this)"><span class="hint">Dê um título a cada foto (ex.: "Tampa riscada", "Dobradiça quebrada"). O título sai no orçamento e no PDF.</span></div></div>`;
   const orc=d.status==='aprovacao';
   showModal({title:p?`Editar pedido ${p.numero}`:(orc?'Novo orçamento':formTipo==='venda'?'Nova venda':'Nova ordem de serviço'),body,wide:true,save:p?'Salvar alterações':(orc?'Criar orçamento':'Criar pedido'),onSave:()=>savePedido(p)});
-  renderFormItems();setFormTipo(formTipo);
+  renderFormItems();renderFormFotos();setFormTipo(formTipo);
 }
+function renderFormFotos(){
+  $('f-fotos').innerHTML=formFotos.map((f,i)=>`<div class="foto-row"><img src="${f.src}" alt="Foto ${i+1}"><input value="${esc(f.titulo||'')}" maxlength="60" placeholder="Título da foto ${i+1} (ex.: tampa riscada)" oninput="formFotos[${i}].titulo=this.value"><button type="button" class="icon-btn" title="Remover foto" onclick="removeFormFoto(${i})">✕</button></div>`).join('');
+  const inp=$('f-foto-input');if(inp){inp.value='';inp.disabled=formFotos.length>=MAX_FOTOS;inp.title=inp.disabled?`Limite de ${MAX_FOTOS} fotos atingido`:''}
+}
+async function addFormFotos(inp){
+  const files=[...inp.files],livres=MAX_FOTOS-formFotos.length;
+  if(files.length>livres)toast(`Cada pedido aceita até ${MAX_FOTOS} fotos. ${livres?`Foram adicionadas só ${livres}.`:'Remova uma foto para adicionar outra.'}`);
+  for(const file of files.slice(0,Math.max(0,livres))){try{formFotos.push({src:await compressImage(file,1000,.75),titulo:''})}catch{toast('Não foi possível ler uma das fotos.')}}
+  renderFormFotos();
+}
+function removeFormFoto(i){formFotos.splice(i,1);renderFormFotos()}
+function verFoto(src){const w=window.open('');if(w)w.document.write(`<title>Foto</title><body style="margin:0;background:#111;display:grid;place-items:center;min-height:100vh"><img src="${src}" style="max-width:100%;max-height:100vh">`)}
 const ckBox=(name,label,lista,cls='')=>`<label class="ck ${cls}"><input type="checkbox" name="${name}" value="${esc(label)}" ${(lista||[]).includes(label)?'checked':''}><span>${esc(label)}</span></label>`;
 function setLiga(v){const f=$('modal-form');f.elements.liga.value=f.elements.liga.value===v?'':v;document.querySelectorAll('#f-liga button').forEach(b=>b.classList.toggle('active',b.dataset.v===f.elements.liga.value))}
 // "Sem defeitos aparentes" e os defeitos se excluem
@@ -737,8 +754,8 @@ async function savePedido(orig){
   const f=$('modal-form'),v=Object.fromEntries(new FormData(f).entries());
   const itens=formItems.filter(i=>String(i.nome).trim()||i.preco).map(i=>({nome:String(i.nome).trim()||'Item',qtd:Math.max(0,Number(i.qtd)||0),preco:round2(i.preco)}));
   if(!itens.length){toast('Adicione pelo menos um item ao pedido.');return false}
-  let foto=orig?.foto||'';const file=f.elements.foto.files[0];if(file){try{foto=await compressImage(file,1100,.8)}catch{toast('Não foi possível ler a foto.');return false}}
-  const srv=formTipo==='servico',data={tipo:formTipo,status:v.status,cliente:String(v.cliente).trim(),equipamento:srv?String(v.equipamento||'').trim():'',defeito:srv?String(v.defeito||'').trim():'',obs:String(v.obs||'').trim(),itens,desconto:parseMoney(v.desconto),frete:parseMoney(v.frete),data:v.data||today(),entrega:v.entrega||'',hora:v.hora||'',foto};
+  const fotos=formFotos.slice(0,MAX_FOTOS).map(x=>({src:x.src,titulo:String(x.titulo||'').trim()}));
+  const srv=formTipo==='servico',data={tipo:formTipo,status:v.status,cliente:String(v.cliente).trim(),equipamento:srv?String(v.equipamento||'').trim():'',defeito:srv?String(v.defeito||'').trim():'',obs:String(v.obs||'').trim(),itens,desconto:parseMoney(v.desconto),frete:parseMoney(v.frete),data:v.data||today(),entrega:v.entrega||'',hora:v.hora||'',fotos,foto:''};
   data.total=calcTotal(itens,data.desconto,data.frete);
   const fd=new FormData(f);
   data.checklist=srv?{acessorios:fd.getAll('ac'),outros:String(v.acOutros||'').trim(),semDefeitos:!!v.semdef,estado:fd.getAll('est'),liga:v.liga||'',senha:String(v.senha||'').trim(),obs:String(v.obsEquip||'').trim()}:null;
@@ -765,7 +782,7 @@ function openPedido(id){
     <div class="d-sec"><h4>Prazo</h4><div class="d-grid"><div><small>Entrada</small>${fmtDate(p.data)}</div><div><small>Previsão de entrega</small>${p.entrega?fmtDate(p.entrega)+(p.hora?' às '+p.hora:''):'—'}</div></div></div>
     <div class="d-sec"><h4>Pagamentos</h4>${pagamentosHTML(p)}</div>
     ${p.obs?`<div class="d-sec"><h4>Observações</h4><div style="font-size:12px;white-space:pre-wrap">${esc(p.obs)}</div></div>`:''}
-    ${p.foto?`<div class="d-sec"><h4>Foto</h4><img class="photo" src="${p.foto}" alt="Foto do equipamento"></div>`:''}
+    ${fotosDe(p).length?`<div class="d-sec"><h4>Fotos (${fotosDe(p).length})</h4><div class="fotos-galeria">${fotosDe(p).map((f,i)=>`<figure><img src="${f.src}" alt="${esc(f.titulo||'Foto '+(i+1))}" onclick="verFoto(this.src)"><figcaption>${i+1}. ${esc(f.titulo||'Sem título')}</figcaption></figure>`).join('')}</div></div>`:''}
   </div>
   <div class="drawer-foot"><button class="btn primary" onclick="openPedidoForm('${p.id}')">✎ Editar</button><button class="btn" onclick="enviarPDF('${p.id}')">📄 Enviar PDF</button><button class="btn" onclick="printDoc('${p.id}')">⎙ Imprimir</button><button class="btn" onclick="sendWhats('${p.id}')">WhatsApp</button><button class="btn" onclick="duplicatePedido('${p.id}')">Duplicar</button><button class="btn danger" style="margin-left:auto" onclick="deletePedido('${p.id}')">Excluir</button></div>`;
   $('drawer-bg').classList.add('show');
@@ -804,7 +821,7 @@ function setStatus(id,st){
   if(st==='concluido'){const open=(p.pagamentos||[]).filter(x=>!x.pago);if(open.length&&confirm(`Marcar ${open.length>1?`as ${open.length} parcelas em aberto`:'o pagamento em aberto'} (${brl(sum(open,x=>x.valor))}) como recebido hoje?`))open.forEach(x=>{x.pago=true;x.pagoEm=today()})}
   persist();render();if(state.drawer===id)openPedido(id);toast(`Status alterado para "${STATUS[st].label}".`);
 }
-function duplicatePedido(id){const o=db.pedidos.find(x=>x.id===id);if(!o)return;const p={...JSON.parse(JSON.stringify(o)),id:uid(),numero:nextNumero(today()),data:today(),entrega:'',hora:'',status:o.status==='aprovacao'?'aprovacao':'pendente',pagamentos:[],baixa:{},foto:'',legado:'',checklist:null,criadoEm:new Date().toISOString()};if(!withStock(p,()=>{}))return;if(billable(p.status)&&p.total>0)p.pagamentos=genPagamentos(p,{...(p.cond||{}),recebido:false,vencimento:today()});db.pedidos.push(p);persist();render();openPedido(p.id);toast(`Pedido duplicado como ${p.numero}.`)}
+function duplicatePedido(id){const o=db.pedidos.find(x=>x.id===id);if(!o)return;const p={...JSON.parse(JSON.stringify(o)),id:uid(),numero:nextNumero(today()),data:today(),entrega:'',hora:'',status:o.status==='aprovacao'?'aprovacao':'pendente',pagamentos:[],baixa:{},foto:'',fotos:[],legado:'',checklist:null,criadoEm:new Date().toISOString()};if(!withStock(p,()=>{}))return;if(billable(p.status)&&p.total>0)p.pagamentos=genPagamentos(p,{...(p.cond||{}),recebido:false,vencimento:today()});db.pedidos.push(p);persist();render();openPedido(p.id);toast(`Pedido duplicado como ${p.numero}.`)}
 function deletePedido(id){const p=db.pedidos.find(x=>x.id===id);if(!p||!confirm(`Excluir o pedido ${p.numero} de ${p.cliente}? Esta ação não pode ser desfeita.`))return;releaseStock(p);db.despesas.forEach(d=>{if(d.pedidoId===id)d.pedidoId=''});db.pedidos=db.pedidos.filter(x=>x.id!==id);closeDrawer();persist();render();toast('Pedido excluído.')}
 function waLink(phone,text){let d=String(phone||'').replace(/\D/g,'');if(d&&!(d.startsWith('55')&&d.length>=12))d='55'+d;return `https://wa.me/${d}?text=${encodeURIComponent(text)}`}
 function sendWhats(id){const p=db.pedidos.find(x=>x.id===id);if(!p)return;const c=clienteOf(p)||{},emp=db.config.empresa||'InfoZenha',doc=p.status==='aprovacao'?'orçamento':p.tipo==='servico'?'ordem de serviço':'pedido';const txt=`Olá, ${p.cliente.split(' ')[0]}! Aqui é da ${emp}.\n\nSeu ${doc} nº ${p.numero}:\n${p.itens.map(i=>`• ${i.qtd}x ${i.nome}: ${brl(i.qtd*i.preco)}`).join('\n')}${p.desconto?`\nDesconto: − ${brl(p.desconto)}`:''}${p.frete?`\nFrete: ${brl(p.frete)}`:''}\n*Total: ${brl(p.total)}*\n\nStatus: ${STATUS[p.status].label}${p.entrega?`\nPrevisão de entrega: ${fmtDate(p.entrega)}${p.hora?' às '+p.hora:''}`:''}${p.tipo==='servico'&&temChecklist(p.checklist)?(()=>{const ac=[...(p.checklist.acessorios||[]),...(p.checklist.outros?[p.checklist.outros]:[])];return `\nAcessórios deixados: ${ac.length?ac.join(', '):'somente o equipamento'}`})():''}`;if(!c.telefone)toast('Cliente sem telefone: escolha o contato no WhatsApp.');window.open(waLink(c.telefone,txt),'_blank','noopener')}
@@ -977,14 +994,14 @@ function docHTML(x,paraPDF=false){
   // No arquivo local (file://) a imagem da logo não pode ir para o PDF: usa o nome da empresa no lugar
   const title=x.status==='aprovacao'?'ORÇAMENTO':x.tipo==='servico'?'ORDEM DE SERVIÇO':'PEDIDO DE VENDA',logo=c.logo||(paraPDF&&location.protocol==='file:'?'':new URL('InfoZenha-logo.png',location.href).href);
   const garantia=x.status==='aprovacao'?'Orçamento válido por 7 dias a partir da data de emissão.':c.garantia;
-  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${title} ${x.numero}</title><style>body{font:13px Arial,sans-serif;color:#1F2226;max-width:780px;margin:30px auto;padding:20px}header{display:flex;justify-content:space-between;align-items:center;gap:20px;border-bottom:3px solid #F8601A;padding-bottom:15px}header img{max-width:170px;max-height:80px;object-fit:contain}.emp{font-size:12px;color:#5E6368;margin-top:6px;line-height:1.5}.tag{background:#FFF0E8;padding:8px 14px;border-radius:20px;color:#C44A0E;font-weight:bold;white-space:nowrap}.meta{text-align:right;font-size:12px;color:#5E6368;margin-top:8px}h3{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:#5E6368;margin:0 0 8px}section{margin:20px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 20px}small{color:#5E6368}table{width:100%;border-collapse:collapse}th{text-align:left;font-size:11px;color:#5E6368;border-bottom:2px solid #E9E9EB;padding:8px}td{padding:9px 8px;border-bottom:1px solid #E9E9EB}.r{text-align:right;white-space:nowrap}.total td{font-size:17px;font-weight:bold;border:0}.box{background:#F6F6F7;border-radius:8px;padding:12px 14px;white-space:pre-wrap}.sign{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:60px;text-align:center;font-size:12px;color:#5E6368}.sign div{border-top:1px solid #1F2226;padding-top:6px}.foot{border-top:1px solid #E9E9EB;padding-top:12px;color:#5E6368;font-size:11px;margin-top:30px}img.foto{max-width:100%;max-height:260px;object-fit:contain;border-radius:8px}@media print{body{margin:0 auto}}</style></head><body>
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${title} ${x.numero}</title><style>body{font:13px Arial,sans-serif;color:#1F2226;max-width:780px;margin:30px auto;padding:20px}header{display:flex;justify-content:space-between;align-items:center;gap:20px;border-bottom:3px solid #F8601A;padding-bottom:15px}header img{max-width:170px;max-height:80px;object-fit:contain}.emp{font-size:12px;color:#5E6368;margin-top:6px;line-height:1.5}.tag{background:#FFF0E8;padding:8px 14px;border-radius:20px;color:#C44A0E;font-weight:bold;white-space:nowrap}.meta{text-align:right;font-size:12px;color:#5E6368;margin-top:8px}h3{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:#5E6368;margin:0 0 8px}section{margin:20px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 20px}small{color:#5E6368}table{width:100%;border-collapse:collapse}th{text-align:left;font-size:11px;color:#5E6368;border-bottom:2px solid #E9E9EB;padding:8px}td{padding:9px 8px;border-bottom:1px solid #E9E9EB}.r{text-align:right;white-space:nowrap}.total td{font-size:17px;font-weight:bold;border:0}.box{background:#F6F6F7;border-radius:8px;padding:12px 14px;white-space:pre-wrap}.sign{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:60px;text-align:center;font-size:12px;color:#5E6368}.sign div{border-top:1px solid #1F2226;padding-top:6px}.foot{border-top:1px solid #E9E9EB;padding-top:12px;color:#5E6368;font-size:11px;margin-top:30px}img.foto{max-width:100%;max-height:260px;object-fit:contain;border-radius:8px}.fotos{display:grid;grid-template-columns:1fr 1fr;gap:14px}.fotos figure{margin:0;break-inside:avoid;page-break-inside:avoid}.fotos img{width:100%;height:230px;object-fit:cover;border-radius:8px;border:1px solid #E9E9EB;display:block}.fotos figcaption{font-size:12px;margin-top:6px}.fotos figcaption b{color:#C44A0E}@media print{body{margin:0 auto}}</style></head><body>
 <header><div>${logo?`<img src="${logo}" alt="${esc(emp)}">`:`<div style="font:bold 24px Arial,sans-serif;color:#F8601A">${esc(emp)}</div>`}<div class="emp">${[c.cnpj?'CNPJ/CPF '+esc(c.cnpj):'',esc(c.telefone||''),esc(c.email||''),esc(c.endereco||'')].filter(Boolean).join(' · ')}</div></div><div><span class="tag">${title} Nº ${x.numero}</span><div class="meta">Emitido em ${fmtDate(today())}</div></div></header>
 <section><h3>Cliente</h3><div class="grid"><div><b>${esc(x.cliente)}</b></div><div>${esc(cl.telefone||'')}</div><div>${esc(cl.email||'')}</div><div>${cl.documento?'CPF/CNPJ: '+esc(cl.documento):''}</div>${cl.endereco?`<div style="grid-column:1/-1">${esc(cl.endereco)}</div>`:''}</div></section>
 ${x.tipo==='servico'?`<section><h3>Equipamento</h3><div><b>${esc(x.equipamento||'—')}</b></div>${x.defeito?`<div style="margin-top:6px"><small>Defeito relatado / diagnóstico:</small><br>${esc(x.defeito)}</div>`:''}</section>${temChecklist(x.checklist)?(()=>{const c=x.checklist,ac=[...(c.acessorios||[]),...(c.outros?[c.outros]:[])];return `<section><h3>Checklist de entrada</h3><table class="ck"><tr><td style="width:34%"><b>Acessórios entregues</b></td><td>${esc(ac.length?ac.join(', '):'Somente o equipamento')}</td></tr><tr><td><b>Estado físico na entrada</b></td><td>${esc(c.semDefeitos?'Sem defeitos aparentes':(c.estado||[]).length?c.estado.join(', '):'Não informado')}</td></tr><tr><td><b>Liga na entrada?</b></td><td>${c.liga?CK_LIGA[c.liga]:'Não informado'}</td></tr>${c.obs?`<tr><td><b>Observações do equipamento</b></td><td style="white-space:pre-wrap">${esc(c.obs)}</td></tr>`:''}</table></section>`})():''}`:''}
 <section><table><tr><th>Descrição</th><th class="r">Qtd</th><th class="r">Valor unit.</th><th class="r">Subtotal</th></tr>${x.itens.map(i=>`<tr><td>${esc(i.nome)}</td><td class="r">${i.qtd}</td><td class="r">${brl(i.preco)}</td><td class="r">${brl(i.qtd*i.preco)}</td></tr>`).join('')}${x.desconto?`<tr><td colspan="3">Desconto</td><td class="r">− ${brl(x.desconto)}</td></tr>`:''}${x.frete?`<tr><td colspan="3">Frete</td><td class="r">+ ${brl(x.frete)}</td></tr>`:''}<tr class="total"><td colspan="3">Total</td><td class="r">${brl(x.total)}</td></tr></table></section>
 <section class="grid"><div><h3>Datas</h3>Entrada: ${fmtDate(x.data)}${x.entrega?`<br>Previsão de entrega: ${fmtDate(x.entrega)}${x.hora?' às '+x.hora:''}`:''}</div><div><h3>Pagamento</h3>${ps.length?ps.map(p=>`${p.de>1?p.parcela+'/'+p.de+' · ':''}${brl(p.valor)} · ${esc(p.forma||'')} · ${p.pago?'pago em '+fmtDate(p.pagoEm):'vence '+fmtDate(p.vencimento)}`).join('<br>'):esc(x.cond?.forma||'A combinar')}</div></section>
 ${x.obs?`<section><h3>Observações</h3><div class="box">${esc(x.obs)}</div></section>`:''}
-${x.foto?`<section><img class="foto" src="${x.foto}"></section>`:''}
+${fotosDe(x).length?`<section><h3>Fotos do equipamento</h3><div class="fotos">${fotosDe(x).map((f,i)=>`<figure><img src="${f.src}" alt="Foto ${i+1}"><figcaption><b>Foto ${i+1}</b>${f.titulo?' · '+esc(f.titulo):''}</figcaption></figure>`).join('')}</div></section>`:''}
 ${garantia?`<section><h3>${x.status==='aprovacao'?'Validade':'Garantia'}</h3><div class="box">${esc(garantia)}</div></section>`:''}
 ${x.tipo==='servico'&&temChecklist(x.checklist)?'<p style="margin:26px 0 0;font-size:12px;color:#5E6368">Declaro que entreguei o equipamento e os acessórios nas condições descritas no checklist de entrada acima.</p>':''}
 <div class="sign"><div>${esc(x.cliente)}<br>Assinatura do cliente</div><div>${esc(emp)}</div></div>
