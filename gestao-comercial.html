@@ -540,11 +540,27 @@ const DEMO={produtos:['Notebook seminovo Lenovo ThinkPad','Notebook seminovo Del
 // Dados do Infor+: ficam no arquivo local dados-infor-plus.js (fora do GitHub) e só existem no computador da loja
 const INFOR_PLUS=window.INFOR_PLUS||null;
 let db,migrationMsg='';
-function load(){let raw=null;try{raw=localStorage.getItem(STORE)}catch{}try{db=raw?JSON.parse(raw):null}catch{db=null}if(!db||typeof db!=='object')db={};migrate(raw)}
+// Os dados ficam no IndexedDB do navegador (centenas de MB). O localStorage (cerca de 5 MB no iPhone) só é usado se o IndexedDB falhar.
+// Na primeira abertura, a cópia do localStorage é gravada no IndexedDB, lida de volta e conferida; só então o espaço antigo é liberado.
+let idb=null,gravacao=Promise.resolve(true);
+function idbOpen(){return new Promise((ok,no)=>{const r=indexedDB.open('infozenha',1);r.onupgradeneeded=()=>{const d=r.result;if(!d.objectStoreNames.contains('kv'))d.createObjectStore('kv');if(!d.objectStoreNames.contains('fotos'))d.createObjectStore('fotos')};r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error);r.onblocked=()=>no(new Error('bloqueado'))})}
+function idbGet(loja,k){return new Promise((ok,no)=>{const q=idb.transaction(loja).objectStore(loja).get(k);q.onsuccess=()=>ok(q.result);q.onerror=()=>no(q.error)})}
+function idbPut(loja,k,v){return new Promise((ok,no)=>{const tx=idb.transaction(loja,'readwrite');tx.objectStore(loja).put(v,k);tx.oncomplete=()=>ok(true);tx.onerror=tx.onabort=()=>no(tx.error||new Error('falha ao gravar'))})}
+async function load(){
+  let raw=null;
+  try{if(!window.indexedDB)throw 0;idb=await idbOpen();raw=await idbGet('kv',STORE)??null}catch{idb=null}
+  let ls=null;try{ls=localStorage.getItem(STORE)}catch{}
+  if(idb&&raw==null&&ls){try{await idbPut('kv',STORE,ls);if(await idbGet('kv',STORE)===ls){raw=ls;localStorage.removeItem(STORE)}else throw 0}catch{idb=null}}
+  if(!idb)raw=ls;
+  try{navigator.storage?.persist?.()}catch{}
+  try{db=raw?JSON.parse(raw):null}catch{db=null}if(!db||typeof db!=='object')db={};migrate(raw);
+}
 // Cópias inteiras antigas ocupavam o pouco espaço do navegador (cerca de 5 MB no iPhone) e faziam o app parar de gravar.
 // O histórico completo já fica no GitHub, então elas são removidas.
 ['-antes-sincronizar','-antes-mesclar','-backup-v1','-backup-v2'].forEach(s=>{try{localStorage.removeItem(STORE+s)}catch{}});
-function saveLocal(){try{localStorage.setItem(STORE,JSON.stringify(db));return true}catch(e){toast('Não foi possível salvar neste aparelho: o espaço do navegador está cheio. Remova fotos de pedidos antigos.');return false}}
+function saveLocalStorage(txt){try{localStorage.setItem(STORE,txt);return true}catch(e){toast('Não foi possível salvar neste aparelho: o espaço do navegador está cheio. Remova fotos de pedidos antigos.');return false}}
+// Grava no aparelho (em ordem) e devolve uma promessa com true/false
+function saveLocal(){const txt=JSON.stringify(db);gravacao=gravacao.then(()=>idb?idbPut('kv',STORE,txt).catch(()=>{idb=null;return saveLocalStorage(txt)}):saveLocalStorage(txt));return gravacao}
 function persist(){saveLocal();markDirty()}
 function migrate(raw){
   ['produtos','servicos','clientes','pedidos','despesas','compromissos'].forEach(k=>{if(!Array.isArray(db[k]))db[k]=[]});
@@ -692,12 +708,42 @@ function renderPedidos(){
 
 // Fotos do pedido: até 5, cada uma com título. Pedidos antigos guardavam uma só em "foto".
 const MAX_FOTOS=5;
-const fotosDe=p=>p.fotos?.length?p.fotos:(p.foto?[{src:p.foto,titulo:''}]:[]);
+// Cada foto é guardada uma vez, à parte dos dados: no aparelho (IndexedDB "fotos") e na nuvem (pasta fotos/ ao lado do arquivo de dados).
+// O nome da foto vem do próprio conteúdo, então dois aparelhos convertendo a mesma foto chegam ao mesmo nome.
+const fotoCache=new Map(),FOTO_VAZIA='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#eee"/><text x="200" y="155" font-family="Arial" font-size="18" fill="#888" text-anchor="middle">Carregando foto…</text></svg>');
+const fotosDe=p=>(p.fotos?.length?p.fotos:(p.foto?[{src:p.foto,titulo:''}]:[])).map(f=>({...f,src:f.src||fotoCache.get(f.id)||FOTO_VAZIA}));
+const hashSeed=(s,h)=>{for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return(h>>>0).toString(36)};
+const fotoId=src=>hashSeed(src,2166136261)+hashSeed(src,374761393)+(/^data:image\/png/.test(src)?'.png':'.jpg');
+async function lerPendentes(){try{return idb?(await idbGet('kv','fotos-pendentes'))||[]:[]}catch{return[]}}
+async function guardarFoto(src){
+  if(!idb||!/^data:image\//.test(src))return null;
+  const id=fotoId(src);fotoCache.set(id,src);
+  try{if(await idbGet('fotos',id)==null){await idbPut('fotos',id,src);const pend=await lerPendentes();if(!pend.includes(id)){pend.push(id);await idbPut('kv','fotos-pendentes',pend)}}return id}catch{return null}
+}
+// Carrega as fotos de um pedido (do aparelho ou, se faltar, da nuvem). Devolve quantas carregou.
+async function garantirFotos(p){
+  let n=0;
+  for(const f of (p?.fotos||[])){if(!f.id||fotoCache.has(f.id))continue;let src=null;
+    try{src=idb?await idbGet('fotos',f.id):null}catch{}
+    if(!src&&syncOn()&&navigator.onLine){try{src=await baixarFoto(f.id);if(src&&idb)await idbPut('fotos',f.id,src)}catch{}}
+    if(src){fotoCache.set(f.id,src);n++}}
+  return n;
+}
+// Fotos antigas, gravadas dentro do pedido, passam para o armazenamento de fotos. Devolve true se mudou algum pedido.
+async function migrarFotos(){
+  if(!idb)return false;let mudou=false;
+  for(const p of db.pedidos){const lista=p.fotos?.length?p.fotos:(p.foto?[{src:p.foto,titulo:''}]:[]);if(!lista.some(f=>f.src)&&!p.foto)continue;
+    const novas=[];let ok=true;for(const f of lista){if(!f.src){novas.push(f);continue}const id=await guardarFoto(f.src);if(id)novas.push({id,titulo:f.titulo||''});else{ok=false;break}}
+    if(ok){p.fotos=novas;p.foto='';mudou=true}}
+  if(mudou)await saveLocal();
+  return mudou;
+}
 let formItems=[],formTipo='servico',formFotos=[];
 function openPedidoForm(id,preset={}){
   const p=id?db.pedidos.find(x=>x.id===id):null;
   const d=p?JSON.parse(JSON.stringify(p)):{tipo:'servico',status:'pendente',cliente:'',equipamento:'',defeito:'',obs:'',itens:[{nome:'',qtd:1,preco:0}],desconto:0,data:today(),entrega:'',hora:'',cond:{forma:db.config.pagamentos[0]||'',parcelas:1,vencimento:today(),recebido:false},...preset};
   formItems=d.itens.map(i=>({...i}));formTipo=d.tipo;formFotos=fotosDe(d).map(f=>({...f}));
+  if(p)garantirFotos(p).then(n=>{if(n&&$('f-fotos')){formFotos.forEach(f=>{if(f.id&&fotoCache.has(f.id))f.src=fotoCache.get(f.id)});renderFormFotos()}});
   const ck={acessorios:[],estado:[],outros:'',semDefeitos:false,liga:'',senha:'',obs:'',...(d.checklist||{})};
   const locked=p&&(p.pagamentos||[]).some(x=>x.pago),c=d.cond||{};
   const body=`<div class="form">
@@ -759,7 +805,7 @@ async function savePedido(orig){
   const f=$('modal-form'),v=Object.fromEntries(new FormData(f).entries());
   const itens=formItems.filter(i=>String(i.nome).trim()||i.preco).map(i=>{const nome=String(i.nome).trim()||'Item',pr=db.produtos.find(x=>String(x.nome).toLowerCase()===nome.toLowerCase()),custo=pr?Number(pr.custo)||0:Number(i.custo)||0;return{nome,qtd:Math.max(0,Number(i.qtd)||0),preco:round2(i.preco),...(custo?{custo}:{})}});
   if(!itens.length){toast('Adicione pelo menos um item ao pedido.');return false}
-  const fotos=formFotos.slice(0,MAX_FOTOS).map(x=>({src:x.src,titulo:String(x.titulo||'').trim()}));
+  const fotos=[];for(const x of formFotos.slice(0,MAX_FOTOS)){const titulo=String(x.titulo||'').trim(),id=x.id||await guardarFoto(x.src);fotos.push(id?{id,titulo}:{src:x.src,titulo})}
   const srv=formTipo==='servico',data={tipo:formTipo,status:v.status,cliente:String(v.cliente).trim(),equipamento:srv?String(v.equipamento||'').trim():'',defeito:srv?String(v.defeito||'').trim():'',obs:String(v.obs||'').trim(),itens,desconto:parseMoney(v.desconto),frete:parseMoney(v.frete),data:v.data||today(),entrega:v.entrega||'',hora:v.hora||'',fotos,foto:''};
   data.total=calcTotal(itens,data.desconto,data.frete);
   const fd=new FormData(f);
@@ -776,6 +822,7 @@ async function savePedido(orig){
 }
 function openPedido(id){
   const p=db.pedidos.find(x=>x.id===id);if(!p)return;state.drawer=id;const c=clienteOf(p)||{};
+  garantirFotos(p).then(n=>{if(n&&state.drawer===id)openPedido(id)});
   const doc=p.status==='aprovacao'?'Orçamento':p.tipo==='servico'?'Ordem de serviço':'Pedido de venda';
   $('drawer').innerHTML=`<div class="drawer-head"><div class="row"><div><div class="eyebrow">${doc}</div><h2>Nº ${p.numero}</h2><div class="sub">${esc(p.cliente)} · entrada em ${fmtDate(p.data)}${p.legado?` · antigo ${esc(p.legado)}`:''}</div></div><button class="icon-btn" style="font-size:18px" onclick="closeDrawer()" title="Fechar (Esc)">✕</button></div></div>
   <div class="drawer-body">
@@ -947,15 +994,16 @@ $('cfg-logo').addEventListener('change',e=>{const f=e.target.files[0];if(!f)retu
 async function saveConfig(){const c=db.config;c.empresa=$('cfg-company').value.trim()||'InfoZenha';c.cnpj=$('cfg-cnpj').value.trim();c.telefone=$('cfg-phone').value.trim();c.email=$('cfg-email').value.trim();c.endereco=$('cfg-address').value.trim();c.site=$('cfg-site').value.trim().replace(/^https?:\/\//,'').replace(/\/$/,'');const ig=$('cfg-instagram').value.trim().replace(/^https?:\/\/(www\.)?instagram\.com\//,'').replace(/\/$/,'');c.instagram=ig&&!ig.startsWith('@')?'@'+ig:ig;c.garantia=$('cfg-garantia').value.trim();const pg=$('cfg-payments').value.split(',').map(x=>x.trim()).filter(Boolean);if(pg.length)c.pagamentos=pg;const f=$('cfg-logo').files[0];try{if(f)c.logo=await compressImage(f,1200,.88,f.type==='image/png');applyBrand();persist();render();toast('Configurações salvas.')}catch{toast('Não foi possível salvar a imagem. Tente um arquivo menor.')}}
 function applyBrand(){$('brand-logo').innerHTML=`<img src="${db.config.logo||'InfoZenha-simbolo.png'}" alt="Logo InfoZenha">`;$('side-company').textContent=db.config.empresa||'InfoZenha'}
 async function compressImage(file,max=1200,q=.85,png=false){const raw=await new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(file)});const im=new Image();im.src=raw;await im.decode();const s=Math.min(1,max/im.width,max/im.height),c=document.createElement('canvas');c.width=Math.max(1,Math.round(im.width*s));c.height=Math.max(1,Math.round(im.height*s));c.getContext('2d').drawImage(im,0,0,c.width,c.height);return c.toDataURL(png?'image/png':'image/jpeg',q)}
-function downloadBackup(){db.config.ultimoBackup=today();persist();const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(db)],{type:'application/json'}));a.download=`infozenha-backup-${today()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);render();toast('Backup baixado. Guarde o arquivo em local seguro.')}
-function restoreBackup(file){if(!file)return;const r=new FileReader();r.onload=()=>{let data;try{data=JSON.parse(r.result);if(!data||!Array.isArray(data.clientes))throw 0}catch{toast('Arquivo de backup inválido.');return}if(!confirm('Restaurar este backup? Os dados atuais deste navegador serão substituídos.'))return;try{localStorage.setItem(STORE+'-antes-restauracao',JSON.stringify(db))}catch{}db=data;migrate(r.result);persist();applyBrand();closeDrawer();render();toast('Backup restaurado.')};r.readAsText(file)}
+async function downloadBackup(){db.config.ultimoBackup=today();persist();const fotos={};for(const p of db.pedidos){await garantirFotos(p);(p.fotos||[]).forEach(f=>{if(f.id&&fotoCache.has(f.id))fotos[f.id]=fotoCache.get(f.id)})}const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify({...db,fotosBackup:fotos})],{type:'application/json'}));a.download=`infozenha-backup-${today()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);render();toast('Backup baixado. Guarde o arquivo em local seguro.')}
+function restoreBackup(file){if(!file)return;const r=new FileReader();r.onload=()=>{let data;try{data=JSON.parse(r.result);if(!data||!Array.isArray(data.clientes))throw 0}catch{toast('Arquivo de backup inválido.');return}if(!confirm('Restaurar este backup? Os dados atuais deste navegador serão substituídos.'))return;const fotos=data.fotosBackup||{};delete data.fotosBackup;db=data;migrate(r.result);(async()=>{for(const src of Object.values(fotos))await guardarFoto(src);await migrarFotos();persist();applyBrand();closeDrawer();render();toast('Backup restaurado.')})()};r.readAsText(file)}
 
 // ============ Documento para impressão ============
-function printDoc(id,recibo=false){const x=db.pedidos.find(p=>p.id===id);if(!x)return;const w=window.open('','_blank');if(!w){toast('Permita a abertura de pop-ups para imprimir.');return}w.document.write(recibo?reciboHTML(x):docHTML(x));w.document.close()}
+async function printDoc(id,recibo=false){const x=db.pedidos.find(p=>p.id===id);if(!x)return;const w=window.open('','_blank');if(!w){toast('Permita a abertura de pop-ups para imprimir.');return}await garantirFotos(x);w.document.write(recibo?reciboHTML(x):docHTML(x));w.document.close()}
 // ============ PDF para enviar (WhatsApp, e-mail...) ============
 // Gera o PDF no próprio aparelho e usa o "Compartilhar" do celular. As bibliotecas só são baixadas na primeira vez.
 function loadScript(src){return new Promise((ok,no)=>{if(src.includes('html2canvas')?window.html2canvas:window.jspdf)return ok();const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=()=>no(new Error('sem internet para preparar o PDF'));document.head.appendChild(s)})}
 async function gerarPDF(x,recibo=false){
+  await garantirFotos(x);
   await loadScript('https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js');
   await loadScript('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js');
   const ifr=document.createElement('iframe');ifr.setAttribute('aria-hidden','true');ifr.style.cssText='position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;background:#fff';document.body.appendChild(ifr);
@@ -1079,7 +1127,17 @@ const b64dec=s=>new TextDecoder().decode(Uint8Array.from(atob(String(s).replace(
 function ghFetch(url,opt={}){return fetch(GH_API+url,{...opt,cache:'no-store',headers:{Authorization:'Bearer '+sync.token,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28',...(opt.headers||{})}})}
 const contentsUrl=()=>`/repos/${sync.repo}/contents/${sync.path.split('/').map(encodeURIComponent).join('/')}`;
 async function remoteGet(){const r=await ghFetch(contentsUrl());if(r.status===404)return null;if(!r.ok)throw new Error('GitHub respondeu '+r.status);const j=await r.json();let text;if(j.encoding==='base64'&&j.content)text=b64dec(j.content);else text=await (await ghFetch(contentsUrl(),{headers:{Accept:'application/vnd.github.raw+json'}})).text();return{sha:j.sha,data:JSON.parse(text)}}
-async function remotePut(sha){const disp=/Mobi|Android|iPhone/i.test(navigator.userAgent)?'celular':'computador';const r=await ghFetch(contentsUrl(),{method:'PUT',body:JSON.stringify({message:`Atualiza dados pelo ${disp} em ${new Date().toLocaleString('pt-BR')}`,content:b64enc(JSON.stringify(db)),...(sha?{sha}:{})})});if(r.status===409||r.status===422)return null;if(r.status===403||r.status===404)throw new Error('a chave só tem permissão de leitura. Edite a chave: Permissions → Contents → Read and write.');if(!r.ok)throw new Error('GitHub respondeu '+r.status);return(await r.json()).content.sha}
+const fotoUrl=id=>`/repos/${sync.repo}/contents/${[...sync.path.split('/').slice(0,-1),'fotos',id].map(encodeURIComponent).join('/')}`;
+const bytesB64=b=>{let bin='';for(let i=0;i<b.length;i+=0x8000)bin+=String.fromCharCode.apply(null,b.subarray(i,i+0x8000));return btoa(bin)};
+async function baixarFoto(id){const r=await ghFetch(fotoUrl(id),{headers:{Accept:'application/vnd.github.raw+json'}});if(!r.ok)return null;return `data:image/${id.endsWith('.png')?'png':'jpeg'};base64,`+bytesB64(new Uint8Array(await r.arrayBuffer()))}
+// Envia as fotos novas antes dos dados: assim a nuvem nunca tem pedido apontando para foto que não subiu
+async function enviarFotosPendentes(){
+  const pend=await lerPendentes();
+  for(const id of [...pend]){const src=await idbGet('fotos',id);
+    if(src){const r=await ghFetch(fotoUrl(id),{method:'PUT',body:JSON.stringify({message:'Foto de pedido '+id,content:src.slice(src.indexOf(',')+1)})});if(!r.ok&&r.status!==422)throw new Error('falha ao enviar foto ('+r.status+')')}
+    pend.splice(pend.indexOf(id),1);await idbPut('kv','fotos-pendentes',pend)}
+}
+async function remotePut(sha){if(idb)await enviarFotosPendentes();const disp=/Mobi|Android|iPhone/i.test(navigator.userAgent)?'celular':'computador';const r=await ghFetch(contentsUrl(),{method:'PUT',body:JSON.stringify({message:`Atualiza dados pelo ${disp} em ${new Date().toLocaleString('pt-BR')}`,content:b64enc(JSON.stringify(db)),...(sha?{sha}:{})})});if(r.status===409||r.status===422)return null;if(r.status===403||r.status===404)throw new Error('a chave só tem permissão de leitura. Edite a chave: Permissions → Contents → Read and write.');if(!r.ok)throw new Error('GitHub respondeu '+r.status);return(await r.json()).content.sha}
 function setSyncState(s,msg){syncState=s;const pill=$('sync-pill');if(pill){pill.style.display=syncOn()?'':'none';pill.className='sync-pill '+s;pill.title=msg||'';pill.querySelector('span').textContent={ok:'Sincronizado',busy:'Sincronizando…',off:'Sem conexão',err:'Erro na sincronização'}[s]||''}if(state.page==='config')renderSyncPanel()}
 function markDirty(){if(!syncOn())return;sync.dirty=true;saveSyncCfg();clearTimeout(syncTimer);syncTimer=setTimeout(()=>syncNow(),2500);setSyncState('busy')}
 const hasLocalData=()=>db.pedidos.length+db.clientes.length+db.despesas.length>0;
@@ -1119,24 +1177,24 @@ function renumerarRepetidos(nuvem){
   return n;
 }
 // Se não deu para gravar no aparelho, não marca como sincronizado: na próxima vez baixa de novo
-function confirmaGravado(sha){return saveLocal()?sha:''}
-function applyRemote(rem){db=rem.data;migrationMsg='';migrate(JSON.stringify(rem.data));sync.sha=confirmaGravado(rem.sha);sync.dirty=false;saveSyncCfg();salvarBase(db);applyBrand();if(state.drawer&&!db.pedidos.some(p=>p.id===state.drawer))closeDrawer();render();if(state.drawer)openPedido(state.drawer);if(migrationMsg){sync.dirty=true;saveSyncCfg()}}
+async function confirmaGravado(sha){return(await saveLocal())?sha:''}
+async function applyRemote(rem){db=rem.data;migrationMsg='';migrate(JSON.stringify(rem.data));const conv=await migrarFotos();sync.sha=await confirmaGravado(rem.sha);sync.dirty=conv;saveSyncCfg();salvarBase(db);applyBrand();if(state.drawer&&!db.pedidos.some(p=>p.id===state.drawer))closeDrawer();render();if(state.drawer)openPedido(state.drawer);if(migrationMsg){sync.dirty=true;saveSyncCfg()}}
 async function syncNow(manual){
-  if(!syncOn()||syncBusy)return;if(!navigator.onLine){setSyncState('off','Sem internet: as alterações ficam guardadas e serão enviadas depois.');return}
+  if(!syncOn()||syncBusy||!db)return;if(!navigator.onLine){setSyncState('off','Sem internet: as alterações ficam guardadas e serão enviadas depois.');return}
   syncBusy=true;setSyncState('busy');
   try{
     for(let tentativa=0;tentativa<3;tentativa++){
       const rem=await remoteGet();
-      if(!rem){const sha=await remotePut(null);if(sha){sync.sha=confirmaGravado(sha);sync.dirty=false;salvarBase(db);break}continue}
-      if(rem.sha===sync.sha){if(!sync.dirty)break;const sha=await remotePut(rem.sha);if(sha){sync.sha=confirmaGravado(sha);sync.dirty=false;salvarBase(db);break}continue}
+      if(!rem){const sha=await remotePut(null);if(sha){sync.sha=await confirmaGravado(sha);sync.dirty=false;salvarBase(db);break}continue}
+      if(rem.sha===sync.sha){if(!sync.dirty)break;const sha=await remotePut(rem.sha);if(sha){sync.sha=await confirmaGravado(sha);sync.dirty=false;salvarBase(db);break}continue}
       // A nuvem mudou desde a última sincronização deste aparelho
-      if(!sync.dirty||!hasLocalData()){applyRemote(rem);if(!sync.dirty)break;continue}
+      if(!sync.dirty||!hasLocalData()){await applyRemote(rem);if(!sync.dirty)break;continue}
       // Os dois lados mudaram: mescla registro a registro (o histórico de versões fica no GitHub)
       const antes={p:db.pedidos.length,c:db.clientes.length};
-      db=mesclar(db,rem.data,lerBase());migrationMsg='';migrate(JSON.stringify(db));
+      db=mesclar(db,rem.data,lerBase());migrationMsg='';migrate(JSON.stringify(db));await migrarFotos();
       const renum=renumerarRepetidos(rem.data);if(renum)toast(`${renum} pedido(s) criado(s) ao mesmo tempo em outro aparelho receberam número novo.`);
       const sha=await remotePut(rem.sha);
-      if(sha){sync.sha=confirmaGravado(sha);sync.dirty=false;salvarBase(db);render();if(state.drawer)openPedido(state.drawer);
+      if(sha){sync.sha=await confirmaGravado(sha);sync.dirty=false;salvarBase(db);render();if(state.drawer)openPedido(state.drawer);
         toast(`Dados deste aparelho e da nuvem foram juntados: ${db.pedidos.length} pedidos e ${db.clientes.length} clientes${db.pedidos.length!==antes.p?` (antes ${antes.p} pedidos aqui)`:''}.`);break}
     }
     sync.ultima=new Date().toISOString();saveSyncCfg();setSyncState(sync.dirty?'err':'ok',sync.dirty?'Não foi possível concluir. Tente “Sincronizar agora”.':'Última sincronização: '+new Date(sync.ultima).toLocaleString('pt-BR'));
@@ -1165,13 +1223,17 @@ window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installProm
 async function installApp(){if(!installPrompt)return;installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$('install-btn').style.display='none'}
 
 // ============ Início ============
-load();applyBrand();
+(async()=>{
+await load();
+if(await migrarFotos())markDirty();
+applyBrand();
 $('today').textContent=new Intl.DateTimeFormat('pt-BR',{dateStyle:'full'}).format(new Date());
 navigate(location.hash.slice(1)||'inicio');
 if(migrationMsg)setTimeout(()=>toast(migrationMsg),500);
 // 28/10/2026: aparelhos que deixaram de gravar por falta de espaço puxam a nuvem de novo, uma única vez
 try{if(syncOn()&&!localStorage.getItem('infozenha-repuxar-20261028')){sync.sha='';saveSyncCfg();localStorage.setItem('infozenha-repuxar-20261028','1')}}catch{}
 if(syncOn()){if(migrationMsg){sync.dirty=true;saveSyncCfg()}setSyncState('busy');syncNow()}
+})();
 </script>
 </body>
 </html>
