@@ -1169,6 +1169,8 @@ const COLECOES=['produtos','servicos','clientes','pedidos','despesas','compromis
 const hashTxt=s=>{let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return(h>>>0).toString(36)};
 const hashReg=r=>hashTxt(JSON.stringify(r));
 function baseDe(d){const b={config:hashReg(d.config||{})};COLECOES.forEach(k=>{b[k]={};(d[k]||[]).forEach(x=>{b[k][String(x.id)]=hashReg(x)})});return b}
+// Só guarda o retrato da sincronização se os dados foram gravados no aparelho (sync.sha vazio = não gravou).
+// Sem isso, um registro que não chegou a ser gravado aqui parecia "apagado neste aparelho" e era apagado da nuvem.
 function salvarBase(d){try{localStorage.setItem(BASE_KEY,JSON.stringify(baseDe(d)))}catch{}}
 function lerBase(){try{return JSON.parse(localStorage.getItem(BASE_KEY)||'null')}catch{return null}}
 function mesclar(local,nuvem,base){
@@ -1199,15 +1201,15 @@ function renumerarRepetidos(nuvem){
 }
 // Se não deu para gravar no aparelho, não marca como sincronizado: na próxima vez baixa de novo
 async function confirmaGravado(sha){return(await saveLocal())?sha:''}
-async function applyRemote(rem){db=rem.data;migrationMsg='';migrate(JSON.stringify(rem.data));const conv=await migrarFotos();sync.sha=await confirmaGravado(rem.sha);sync.dirty=conv;saveSyncCfg();salvarBase(db);applyBrand();if(state.drawer&&!db.pedidos.some(p=>p.id===state.drawer))closeDrawer();render();if(state.drawer)openPedido(state.drawer);if(migrationMsg){sync.dirty=true;saveSyncCfg()}}
+async function applyRemote(rem){db=rem.data;migrationMsg='';migrate(JSON.stringify(rem.data));const conv=await migrarFotos();sync.sha=await confirmaGravado(rem.sha);sync.dirty=conv;saveSyncCfg();if(sync.sha)salvarBase(db);applyBrand();if(state.drawer&&!db.pedidos.some(p=>p.id===state.drawer))closeDrawer();render();if(state.drawer)openPedido(state.drawer);if(migrationMsg){sync.dirty=true;saveSyncCfg()}}
 async function syncNow(manual){
   if(!syncOn()||syncBusy||!db)return;if(!navigator.onLine){setSyncState('off','Sem internet: as alterações ficam guardadas e serão enviadas depois.');return}
   syncBusy=true;setSyncState('busy');
   try{
     for(let tentativa=0;tentativa<3;tentativa++){
       const rem=await remoteGet();
-      if(!rem){const sha=await remotePut(null);if(sha){sync.sha=await confirmaGravado(sha);sync.dirty=false;salvarBase(db);break}continue}
-      if(rem.sha===sync.sha){if(!sync.dirty)break;const sha=await remotePut(rem.sha);if(sha){sync.sha=await confirmaGravado(sha);sync.dirty=false;salvarBase(db);break}continue}
+      if(!rem){const sha=await remotePut(null);if(sha){sync.sha=await confirmaGravado(sha);sync.dirty=false;if(sync.sha)salvarBase(db);break}continue}
+      if(rem.sha===sync.sha){if(!sync.dirty)break;const sha=await remotePut(rem.sha);if(sha){sync.sha=await confirmaGravado(sha);sync.dirty=false;if(sync.sha)salvarBase(db);break}continue}
       // A nuvem mudou desde a última sincronização deste aparelho
       if(!sync.dirty||!hasLocalData()){await applyRemote(rem);if(!sync.dirty)break;continue}
       // Os dois lados mudaram: mescla registro a registro (o histórico de versões fica no GitHub)
@@ -1215,7 +1217,7 @@ async function syncNow(manual){
       db=mesclar(db,rem.data,lerBase());migrationMsg='';migrate(JSON.stringify(db));await migrarFotos();
       const renum=renumerarRepetidos(rem.data);if(renum)toast(`${renum} pedido(s) criado(s) ao mesmo tempo em outro aparelho receberam número novo.`);
       const sha=await remotePut(rem.sha);
-      if(sha){sync.sha=await confirmaGravado(sha);sync.dirty=false;salvarBase(db);render();if(state.drawer)openPedido(state.drawer);
+      if(sha){sync.sha=await confirmaGravado(sha);sync.dirty=false;if(sync.sha)salvarBase(db);render();if(state.drawer)openPedido(state.drawer);
         toast(`Dados deste aparelho e da nuvem foram juntados: ${db.pedidos.length} pedidos e ${db.clientes.length} clientes${db.pedidos.length!==antes.p?` (antes ${antes.p} pedidos aqui)`:''}.`);break}
     }
     sync.ultima=new Date().toISOString();saveSyncCfg();setSyncState(sync.dirty?'err':'ok',sync.dirty?'Não foi possível concluir. Tente “Sincronizar agora”.':'Última sincronização: '+new Date(sync.ultima).toLocaleString('pt-BR'));
