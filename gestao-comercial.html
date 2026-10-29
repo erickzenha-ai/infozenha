@@ -541,7 +541,10 @@ const DEMO={produtos:['Notebook seminovo Lenovo ThinkPad','Notebook seminovo Del
 const INFOR_PLUS=window.INFOR_PLUS||null;
 let db,migrationMsg='';
 function load(){let raw=null;try{raw=localStorage.getItem(STORE)}catch{}try{db=raw?JSON.parse(raw):null}catch{db=null}if(!db||typeof db!=='object')db={};migrate(raw)}
-function saveLocal(){try{localStorage.setItem(STORE,JSON.stringify(db))}catch(e){toast('Não foi possível salvar. O espaço do navegador pode estar cheio: baixe um backup e remova fotos grandes.')}}
+// Cópias inteiras antigas ocupavam o pouco espaço do navegador (cerca de 5 MB no iPhone) e faziam o app parar de gravar.
+// O histórico completo já fica no GitHub, então elas são removidas.
+['-antes-sincronizar','-antes-mesclar','-backup-v1','-backup-v2'].forEach(s=>{try{localStorage.removeItem(STORE+s)}catch{}});
+function saveLocal(){try{localStorage.setItem(STORE,JSON.stringify(db));return true}catch(e){toast('Não foi possível salvar neste aparelho: o espaço do navegador está cheio. Remova fotos de pedidos antigos.');return false}}
 function persist(){saveLocal();markDirty()}
 function migrate(raw){
   ['produtos','servicos','clientes','pedidos','despesas','compromissos'].forEach(k=>{if(!Array.isArray(db[k]))db[k]=[]});
@@ -1113,24 +1116,25 @@ function renumerarRepetidos(nuvem){
   db.pedidos.forEach(p=>{const o=vistos.get(p.numero);if(!o){vistos.set(p.numero,p);return}const novo=daNuvem.has(String(p.id))?o:p;novo.numero=nextNumero(novo.data);vistos.set(novo.numero,novo);n++});
   return n;
 }
-function applyRemote(rem){try{localStorage.setItem(STORE+'-antes-sincronizar',JSON.stringify(db))}catch{}db=rem.data;migrationMsg='';migrate(JSON.stringify(rem.data));sync.sha=rem.sha;sync.dirty=false;saveSyncCfg();salvarBase(db);applyBrand();if(state.drawer&&!db.pedidos.some(p=>p.id===state.drawer))closeDrawer();render();if(state.drawer)openPedido(state.drawer);if(migrationMsg){sync.dirty=true;saveSyncCfg()}}
+// Se não deu para gravar no aparelho, não marca como sincronizado: na próxima vez baixa de novo
+function confirmaGravado(sha){return saveLocal()?sha:''}
+function applyRemote(rem){db=rem.data;migrationMsg='';migrate(JSON.stringify(rem.data));sync.sha=confirmaGravado(rem.sha);sync.dirty=false;saveSyncCfg();salvarBase(db);applyBrand();if(state.drawer&&!db.pedidos.some(p=>p.id===state.drawer))closeDrawer();render();if(state.drawer)openPedido(state.drawer);if(migrationMsg){sync.dirty=true;saveSyncCfg()}}
 async function syncNow(manual){
   if(!syncOn()||syncBusy)return;if(!navigator.onLine){setSyncState('off','Sem internet: as alterações ficam guardadas e serão enviadas depois.');return}
   syncBusy=true;setSyncState('busy');
   try{
     for(let tentativa=0;tentativa<3;tentativa++){
       const rem=await remoteGet();
-      if(!rem){const sha=await remotePut(null);if(sha){sync.sha=sha;sync.dirty=false;salvarBase(db);break}continue}
-      if(rem.sha===sync.sha){if(!sync.dirty)break;const sha=await remotePut(rem.sha);if(sha){sync.sha=sha;sync.dirty=false;salvarBase(db);break}continue}
+      if(!rem){const sha=await remotePut(null);if(sha){sync.sha=confirmaGravado(sha);sync.dirty=false;salvarBase(db);break}continue}
+      if(rem.sha===sync.sha){if(!sync.dirty)break;const sha=await remotePut(rem.sha);if(sha){sync.sha=confirmaGravado(sha);sync.dirty=false;salvarBase(db);break}continue}
       // A nuvem mudou desde a última sincronização deste aparelho
       if(!sync.dirty||!hasLocalData()){applyRemote(rem);if(!sync.dirty)break;continue}
-      // Os dois lados mudaram: mescla registro a registro (guarda antes uma cópia deste aparelho)
-      try{localStorage.setItem(STORE+'-antes-mesclar',JSON.stringify(db))}catch{}
+      // Os dois lados mudaram: mescla registro a registro (o histórico de versões fica no GitHub)
       const antes={p:db.pedidos.length,c:db.clientes.length};
       db=mesclar(db,rem.data,lerBase());migrationMsg='';migrate(JSON.stringify(db));
       const renum=renumerarRepetidos(rem.data);if(renum)toast(`${renum} pedido(s) criado(s) ao mesmo tempo em outro aparelho receberam número novo.`);
       const sha=await remotePut(rem.sha);
-      if(sha){sync.sha=sha;sync.dirty=false;salvarBase(db);render();if(state.drawer)openPedido(state.drawer);
+      if(sha){sync.sha=confirmaGravado(sha);sync.dirty=false;salvarBase(db);render();if(state.drawer)openPedido(state.drawer);
         toast(`Dados deste aparelho e da nuvem foram juntados: ${db.pedidos.length} pedidos e ${db.clientes.length} clientes${db.pedidos.length!==antes.p?` (antes ${antes.p} pedidos aqui)`:''}.`);break}
     }
     sync.ultima=new Date().toISOString();saveSyncCfg();setSyncState(sync.dirty?'err':'ok',sync.dirty?'Não foi possível concluir. Tente “Sincronizar agora”.':'Última sincronização: '+new Date(sync.ultima).toLocaleString('pt-BR'));
@@ -1163,6 +1167,8 @@ load();applyBrand();
 $('today').textContent=new Intl.DateTimeFormat('pt-BR',{dateStyle:'full'}).format(new Date());
 navigate(location.hash.slice(1)||'inicio');
 if(migrationMsg)setTimeout(()=>toast(migrationMsg),500);
+// 28/10/2026: aparelhos que deixaram de gravar por falta de espaço puxam a nuvem de novo, uma única vez
+try{if(syncOn()&&!localStorage.getItem('infozenha-repuxar-20261028')){sync.sha='';saveSyncCfg();localStorage.setItem('infozenha-repuxar-20261028','1')}}catch{}
 if(syncOn()){if(migrationMsg){sync.dirty=true;saveSyncCfg()}setSyncState('busy');syncNow()}
 </script>
 </body>
